@@ -12,105 +12,135 @@ export default function YearGroupSelector({ years = [], selectedYears = [], onCh
   const [internal, setInternal] = useState(new Set(selectedYears))
   useEffect(() => { setInternal(new Set(selectedYears)) }, [selectedYears.join(',')])
 
+  // Agrupa los años por décadas y filtra según búsqueda
   const decades = useMemo(() => {
-    const y = [...years].filter(Boolean).sort((a,b) => a-b)
+    const y = [...years].filter(Boolean).sort((a, b) => a - b)
     const groups = new Map()
     for (const yr of y) {
       if (search && !String(yr).includes(search)) continue
-      const d = Math.floor(yr/10)*10
+      const d = Math.floor(yr / 10) * 10
       if (!groups.has(d)) groups.set(d, [])
       groups.get(d).push(yr)
     }
     return Array.from(groups.entries()).map(([decade, ys]) => ({ decade, years: ys }))
   }, [years, search])
 
+  // Alterna un año individual
   function toggleYear(y) {
     const next = new Set(internal)
     next.has(y) ? next.delete(y) : next.add(y)
     setInternal(next)
-    onChange(Array.from(next).sort((a,b)=>a-b))
+    onChange(Array.from(next).sort((a, b) => a - b))
   }
 
+  // Alterna todos los años de una década
   function toggleDecade(decade) {
     const ys = decades.find(d => d.decade === decade)?.years || []
     const next = new Set(internal)
     const allIn = ys.every(y => next.has(y))
-    if (allIn) ys.forEach(y => next.delete(y)); else ys.forEach(y => next.add(y))
+    if (allIn) ys.forEach(y => next.delete(y))
+    else ys.forEach(y => next.add(y))
     setInternal(next)
-    onChange(Array.from(next).sort((a,b)=>a-b))
+    onChange(Array.from(next).sort((a, b) => a - b))
   }
 
+  // Selecciona los últimos n años de la lista
   function setQuick(n) {
-    const pick = [...years].sort((a,b)=>a-b).slice(-n)
+    const pick = [...years].sort((a, b) => a - b).slice(-n)
     setInternal(new Set(pick))
     onChange(pick)
   }
 
-  function setAll(){ const y=[...years].sort((a,b)=>a-b); setInternal(new Set(y)); onChange(y); }
-  function clearAll(){ setInternal(new Set()); onChange([]); }
+  function setAll() {
+    const y = [...years].sort((a, b) => a - b)
+    setInternal(new Set(y))
+    onChange(y)
+  }
+  function clearAll() {
+    setInternal(new Set())
+    onChange([])
+  }
 
   const totalSel = internal.size
 
   return (
- 
+    <div className="space-y-3">
       {/* Barra superior compacta */}
- 
- 
- Años
- 
- setSearch(e.target.value)}
-           className="px-2 py-1.5 text-sm border rounded-md"
-           placeholder="Buscar año…"
-         />
- 
- {totalSel} seleccionados 
- 
- Todos 
- Ninguno 
- setQuick(5)} className="px-2 py-1 text-xs rounded-full">Últimos 5 
- setQuick(10)} className="px-2 py-1 text-xs rounded-full">Últimos 10 
- 
- 
- 
- 
-       {/* Tarjetas de década compactas */}
- 
-         {decades.map(({decade, years}) => {
-           const allIn = years.every(y => internal.has(y))
-           const someIn = !allIn && years.some(y => internal.has(y))
-           return (
- 
- 
- {decade}–{decade+9} 
- toggleDecade(decade)}
-                   className={`px-2 py-1 text-[11px] rounded-md border flex items-center gap-1 ${
-                     allIn
-                       ? 'bg-indigo-600 text-white border-indigo-600'
-                       : someIn
-                       ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                       : 'bg-white border-indigo-600'
-                   }`}
-                 >
- {allIn ? 'Quitar' : someIn ? 'Completar' : 'Seleccionar'}
-                 
- 
- 
-                 {years.map(y => (
- toggleYear(y)}
-                     className={`px-2 py-1 text-[11px] rounded-md border text-center transition ${
-                       internal.has(y)
-                         ? 'bg-indigo-600 text-white border-indigo-600'
-                         : 'bg-white border-indigo-600'
-                     }`}
-                   >
-                     {y}
-                   
-                 ))}
- 
- 
-           )
-         })}
- 
-     
-   )
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <SlidersHorizontal className="w-4 h-4 text-gray-500" />
+          Años
+        </div>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="px-2 py-1.5 text-sm border rounded-md"
+          placeholder="Buscar año…"
+        />
+        <span className="text-xs text-gray-500">{totalSel} seleccionados</span>
+        <button onClick={setAll} className="px-2 py-1 text-xs rounded-full">
+          Todos
+        </button>
+        <button onClick={clearAll} className="px-2 py-1 text-xs rounded-full">
+          Ninguno
+        </button>
+        <button onClick={() => setQuick(5)} className="px-2 py-1 text-xs rounded-full">
+          Últimos 5
+        </button>
+        <button onClick={() => setQuick(10)} className="px-2 py-1 text-xs rounded-full">
+          Últimos 10
+        </button>
+      </div>
+      {/* Tarjetas de década compactas */}
+      <div
+        className="flex gap-2 overflow-x-auto snap-x snap-mandatory pb-2"
+        style={{ scrollbarWidth: 'thin' }}
+      >
+        {decades.map(({ decade, years }) => {
+          const allIn = years.every(y => internal.has(y))
+          const someIn = !allIn && years.some(y => internal.has(y))
+          return (
+            <div
+              key={decade}
+              className="snap-start shrink-0 min-w-[389px] max-w-[460px] rounded-xl border bg-white"
+            >
+              <div className="flex items-center justify-between px-3 py-2 border-b">
+                <div className="text-sm font-semibold">
+                  {decade}–{decade + 9}
+                </div>
+                <button
+                  onClick={() => toggleDecade(decade)}
+                  className={`px-2 py-1 text-[11px] rounded-md border flex items-center gap-1 ${
+                    allIn
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : someIn
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                      : 'bg-white hover:bg-gray-50'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />{' '}
+                  {allIn ? 'Quitar' : someIn ? 'Completar' : 'Seleccionar'}
+                </button>
+              </div>
+              <div className="grid grid-cols-6 gap-1.5">
+                {years.map(y => (
+                  <button
+                    key={y}
+                    onClick={() => toggleYear(y)}
+                    className={`px-2 py-1 text-[11px] rounded-md border text-center transition ${
+                      internal.has(y)
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white border-indigo-600'
+                    }`}
+                  >
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }

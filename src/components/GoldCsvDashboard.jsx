@@ -5,6 +5,8 @@ import CandleChart from './CandleChart.jsx'
 import Kpi from './Kpi.jsx'
 import TopTable from './TopTable.jsx'
 import CsvLoader from './CsvLoader.jsx'
+import YearGroupSelector from './YearGroupSelector.jsx'
+import HScrollCarousel from './HScrollCarousel.jsx'
 import { CONFIG } from '../config.js'
 import { aggregateOhlc, enumerateDays, quantile, loadCsvFromUrl } from '../utils.js'
 import { fetchMissingDaysSequential } from '../api.js'
@@ -307,7 +309,7 @@ export default function GoldCsvDashboard() {
           </div>
 
           {kpis && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <HScrollCarousel itemWidth={300} ariaLabel="KPIs por año">
               <Kpi icon={Gauge} label="Variación media diaria" value={kpis.avg.toFixed(2)} hint="High-Low promedio" />
               <Kpi icon={Maximize2} label="Máxima variación diaria" value={kpis.maxR.toFixed(2)} hint={kpis.maxRow.date.toISOString().slice(0, 10)} />
               <Kpi icon={TrendingUp} label="Mes más volátil" value={kpis.monthly.slice().sort((a, b) => b.avg - a.avg)[0]?.month || "—"} />
@@ -345,13 +347,13 @@ export default function GoldCsvDashboard() {
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <HScrollCarousel itemWidth={300} ariaLabel="KPIs por año">
             {selectedYears.map((y) => {
               const s = yearSummaries.get(y);
               if (!s) return null;
               return (<Kpi key={y} icon={Gauge} label={`Media diaria ${y}`} value={s.avg.toFixed(2)} hint={`Días: ${s.days} · Máx: ${s.maxRow.range.toFixed(2)} (${s.maxRow.date.toISOString().slice(0,10)})`} />);
             })}
-          </div>
+          </HScrollCarousel>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">

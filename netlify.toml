@@ -1,6 +1,6 @@
 # Netlify configuration for Vite (React)
 [build]
-  command = "npm ci && npm run build"
+  command = "npm install && npm run build"
   publish = "dist"
 
 [build.environment]

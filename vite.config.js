@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Build with relative base so it works on any subpath (e.g., GitHub Pages)
+// Universal base for Netlify/Cloudflare/Vercel and most static hosts.
+// For GitHub Pages under a subpath, this still works in la mayoría de casos.
 export default defineConfig({
   plugins: [react()],
   base: './',

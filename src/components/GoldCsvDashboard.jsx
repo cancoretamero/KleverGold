@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush, ReferenceLine, Legend } from 'recharts'
-import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload, SlidersHorizontal } from "lucide-react"
+import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload } from "lucide-react"
 import CandleChart from './CandleChart.jsx'
 import Kpi from './Kpi.jsx'
 import TopTable from './TopTable.jsx'
@@ -9,6 +9,10 @@ import { CONFIG } from '../config.js'
 import { aggregateOhlc, enumerateDays, quantile, loadCsvFromUrl } from '../utils.js'
 import { fetchMissingDaysSequential } from '../api.js'
 import { loadExtraFromLS, saveExtraToLS, mapByDate, rowsFromMap } from '../storage.js'
+
+// NUEVOS imports
+import YearGroupSelector from './YearGroupSelector.jsx'
+import HScrollCarousel from './HScrollCarousel.jsx'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -194,10 +198,6 @@ export default function GoldCsvDashboard() {
       .sort((a, b) => a.day - b.day);
   }, [analysisPool, yearFocus, monthFocus]);
 
-  function toggleYear(y) {
-    setSelectedYears((prev) => (prev.includes(y) ? prev.filter((v) => v !== y) : [...prev, y].sort((a, b) => a - b)));
-  }
-
   const gaps = useMemo(() => {
     if (!presetRange.from || !presetRange.to || !rows.length) return [];
     const allDays = enumerateDays(presetRange.from, presetRange.to).map((d) => d.toISOString().slice(0, 10));
@@ -319,20 +319,14 @@ export default function GoldCsvDashboard() {
 
       {baseRows.length > 0 && (
         <section className="border rounded-2xl p-4 bg-white space-y-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex items-center gap-2">
-              <SlidersHorizontal className="w-4 h-4 text-gray-500" />
-              <div className="text-sm font-medium">Años</div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {yearsAvailable.map((y) => (
-                <button key={y} onClick={() => toggleYear(y)} className={`px-2 py-1 text-xs rounded-md border ${selectedYears.includes(y) ? "bg-indigo-600 text-white border-indigo-600" : "bg-white hover:bg-gray-50"}`}>{y}</button>
-              ))}
-              {yearsAvailable.length > 0 && (
-                <button onClick={() => setSelectedYears(yearsAvailable.slice(-5))} className="px-2 py-1 text-xs rounded-md border bg-white hover:bg-gray-50">Últimos 5 años</button>
-              )}
-            </div>
-            <div className="ml-auto flex items-center gap-2">
+          {/* === CONTROLES NUEVOS: selector compacto + focos === */}
+          <div className="space-y-3">
+            <YearGroupSelector
+              years={yearsAvailable}
+              selectedYears={selectedYears}
+              onChange={(ys) => setSelectedYears(ys)}
+            />
+            <div className="flex items-center gap-2 justify-end">
               <label className="text-xs text-gray-500">Año foco</label>
               <select value={yearFocus ?? ''} onChange={(e) => setYearFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
                 {yearsAvailable.map((y) => (<option value={y} key={y}>{y}</option>))}
@@ -341,17 +335,29 @@ export default function GoldCsvDashboard() {
               <select value={monthFocus ?? ''} onChange={(e) => setMonthFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
                 {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (<option key={m} value={m}>{String(m).padStart(2, '0')}</option>))}
               </select>
-              <label className="text-xs text-gray-500 inline-flex items-center gap-1"><input type="checkbox" className="accent-indigo-600" checked={filterOutliers} onChange={(e) => setFilterOutliers(e.target.checked)} />Filtro outliers p99</label>
+              <label className="text-xs text-gray-500 inline-flex items-center gap-1">
+                <input type="checkbox" className="accent-indigo-600" checked={filterOutliers} onChange={(e) => setFilterOutliers(e.target.checked)} />
+                Filtro outliers p99
+              </label>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Resumen por año seleccionado */}
+          <HScrollCarousel itemWidth={280} ariaLabel="KPIs por año">
             {selectedYears.map((y) => {
               const s = yearSummaries.get(y);
               if (!s) return null;
-              return (<Kpi key={y} icon={Gauge} label={`Media diaria ${y}`} value={s.avg.toFixed(2)} hint={`Días: ${s.days} · Máx: ${s.maxRow.range.toFixed(2)} (${s.maxRow.date.toISOString().slice(0,10)})`} />);
+              return (
+                <Kpi
+                  key={y}
+                  icon={Gauge}
+                  label={`Media diaria ${y}`}
+                  value={s.avg.toFixed(2)}
+                  hint={`Días: ${s.days} · Máx: ${s.maxRow.range.toFixed(2)} (${s.maxRow.date.toISOString().slice(0,10)})`}
+                />
+              );
             })}
-          </div>
+          </HScrollCarousel>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">

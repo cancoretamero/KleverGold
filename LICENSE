@@ -1,0 +1,72 @@
+AISA GROUP CA — INTERNAL USE LICENSE v1.0
+Copyright (c) 2025 Aisa Group (aisagroup.ca). All rights reserved.
+
+1. Definitions
+   “Owner” means Aisa Group. “Project Materials” means all source code, object code,
+   configuration, scripts, documentation, and assets included in this repository, excluding
+   third‑party components that are provided under their own licenses (“Third‑Party Software”).
+
+2. Grant
+   Subject to the terms herein, Owner grants only to Aisa Group and its wholly‑owned
+   subsidiaries a limited, revocable, non‑exclusive, non‑transferable, non‑sublicensable
+   license to install and use the Project Materials solely for internal business purposes.
+
+3. Restrictions
+   You shall not (and shall not permit any third party to):
+   (a) distribute, publish, disclose, host for or provide access to any third party;
+   (b) sell, rent, lease, lend, sublicense, timeshare or outsource;
+   (c) modify or create derivative works for any purpose other than internal use;
+   (d) reverse engineer, decompile, disassemble, or otherwise attempt to derive source code
+       or underlying ideas or data models except to the extent such restriction is prohibited
+       by applicable law;
+   (e) remove proprietary notices or this License;
+   (f) benchmark, publicly compare performance, or train, fine‑tune, or evaluate any AI/ML
+       system on or using the Project Materials or outputs thereof;
+   (g) use the Project Materials to provide services to third parties or to develop competing
+       products; or
+   (h) circumvent technical measures, rate limits, or security controls.
+
+4. Confidentiality
+   The Project Materials constitute confidential information of Owner. You shall maintain
+   them in strict confidence and shall not disclose them publicly or to any third party
+   without prior written consent of Owner.
+
+5. Ownership; Feedback; Internal Modifications
+   Owner retains all right, title, and interest in and to the Project Materials. Internal
+   modifications made by or for Aisa Group are deemed derivative works; to the maximum
+   extent permitted by law, any rights therein are assigned to Owner upon creation.
+   Third‑Party Software remains the property of its respective licensors.
+
+6. Third‑Party Software
+   The Project Materials may include or rely upon Third‑Party Software which is licensed
+   under separate open‑source or proprietary terms. Nothing in this License limits or
+   alters your rights or obligations under such third‑party terms.
+
+7. Term and Termination
+   This License is effective until terminated. Owner may terminate immediately upon notice
+   if you breach any term. Upon termination, you shall cease all use and destroy all copies.
+   Sections 3–6 and 8–11 survive termination.
+
+8. No Warranty
+   THE PROJECT MATERIALS ARE PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTIES OF ANY
+   KIND, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON‑INFRINGEMENT.
+
+9. Limitation of Liability
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL OWNER BE LIABLE FOR ANY
+   INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY OR PUNITIVE DAMAGES, OR LOST
+   PROFITS, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. OWNER’S TOTAL LIABILITY FOR
+   ANY CLAIM SHALL NOT EXCEED ONE HUNDRED (100) USD.
+
+10. Compliance
+   You shall comply with applicable laws and regulations (including export, sanctions, and
+   data protection). You are solely responsible for your use with any third‑party services
+   (e.g., APIs) and for all credentials and data you supply.
+
+11. Governing Law; Venue
+   This License is governed by the laws of Canada and the Province of Ontario, without regard
+   to conflicts of law principles. Exclusive jurisdiction and venue lie in the courts located
+   in Toronto, Ontario.
+
+12. Contact
+   For permissions or inquiries, contact: contact@aisagroup.ca

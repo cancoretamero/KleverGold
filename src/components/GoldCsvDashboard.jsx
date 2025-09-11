@@ -10,16 +10,12 @@ import { aggregateOhlc, enumerateDays, quantile, loadCsvFromUrl } from '../utils
 import { fetchMissingDaysSequential } from '../api.js'
 import { loadExtraFromLS, saveExtraToLS, mapByDate, rowsFromMap } from '../storage.js'
 
-'use client';
-
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ReferenceLine } from 'recharts';
-import { RefreshCcw } from 'lucide-react';
-
 // NUEVOS imports
 import YearGroupSelector from './YearGroupSelector.jsx'
 import HScrollCarousel from './HScrollCarousel.jsx'
 import ModernHistograms from './ModernHistograms.jsx'
+// NUEVO: widget de últimos datos (liquid-glass + sparkline)
+import GoldNowSection from './GoldNowSection.jsx'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -244,6 +240,7 @@ export default function GoldCsvDashboard() {
         )}
       </header>
 
+      {/* Bloque de fuente CSV */}
       <section className="rounded-2xl border bg-white p-4 flex flex-wrap items-center gap-3">
         <div className="text-sm flex items-center gap-2">
           <CloudDownload className="w-4 h-4" />
@@ -257,6 +254,20 @@ export default function GoldCsvDashboard() {
         </div>
         <div className="ml-auto text-xs text-gray-500">API key {CONFIG.API_KEY ? "presente" : "ausente"}</div>
       </section>
+
+      {/* === NUEVA SECCIÓN: “Últimos datos del oro” (debajo del CSV) === */}
+      <GoldNowSection
+        rows={rows}
+        fetchMissingDaysSequential={fetchMissingDaysSequential}
+        onAppendRows={(rowsNew) => {
+          if (!rowsNew?.length) return;
+          const m = mapByDate(extraRows);
+          for (const r of rowsNew) m.set(r.date.toISOString().slice(0,10), r);
+          const merged = rowsFromMap(m);
+          setExtraRows(merged);
+          saveExtraToLS(merged);
+        }}
+      />
 
       {needCsv && <CsvLoader onData={onCsvUpload} />}
 

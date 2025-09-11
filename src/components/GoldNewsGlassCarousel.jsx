@@ -4,19 +4,19 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
 /**
- * GoldNewsGlassCarousel — v1.3
- * - Sombras INDIVIDUALES (levitación) + overflow vertical: no hay “línea” de corte.
- * - Scrollbar oculta.
- * - Posición inicial fija (por defecto 2ª tarjeta).
- * - Imágenes con preload + skeleton + fallbacks temáticos.
- * - Demo estética (datos falsos).
+ * GoldNewsGlassCarousel — v1.3 (corregido)
+ * - Sombras INDIVIDUALES (levitación) + overflow vertical (sin línea de corte).
+ * - Scrollbar oculta (sin deslizador gris).
+ * - Posición inicial fija (2ª tarjeta; configurable con initialIndex).
+ * - Imágenes robustas (preload + skeleton + fallbacks temáticos ESTABLES).
+ * - Demo estética con datos falsos.
  */
 export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
   const data = useMemo(() => (items && items.length ? items : FAKE_NEWS), [items]);
   const wrapRef = useRef(null);
   const [active, setActive] = useState(initialIndex);
 
-  // Centrar tarjeta inicial
+  // Centra la tarjeta inicial
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
     const card = el.querySelector('[data-card]');
@@ -28,7 +28,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
     setActive(initialIndex);
   }, [data, initialIndex]);
 
-  // Track de tarjeta visible
+  // Observa la tarjeta más visible para los bullets
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
     const io = new IntersectionObserver((entries) => {
@@ -51,7 +51,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
 
   return (
     <section className="relative rounded-3xl border border-black/5 bg-white p-4">
-      {/* Ocultar scrollbar y permitir overflow vertical (sombras libres) */}
+      {/* Oculta scrollbar y permite overflow vertical para que no se corten sombras */}
       <style>{`
         .news-scroll { -ms-overflow-style: none; scrollbar-width: none; overflow-y: visible; }
         .news-scroll::-webkit-scrollbar { display: none; height: 0; background: transparent; }
@@ -59,9 +59,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
 
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-black/5">
-            <Sparkles className="w-4 h-4" />
-          </div>
+          <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
           <h3 className="text-lg font-semibold tracking-tight">Titulares que mueven el oro</h3>
         </div>
         <div className="text-xs text-gray-500">Demo estética (datos falsos)</div>
@@ -88,28 +86,19 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
         <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-white to-transparent" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-white to-transparent" />
 
-        {/* Contenedor */}
-        <div
-          ref={wrapRef}
-          className="news-scroll flex gap-6 overflow-x-auto snap-x snap-mandatory pb-8 px-16"
-        >
+        {/* Carrusel: scrollbar oculto, gap mayor, padding inferior para sombras */}
+        <div ref={wrapRef} className="news-scroll flex gap-6 overflow-x-auto snap-x snap-mandatory pb-8 px-16">
           {data.map((it, idx) => (
-            <article
-              key={idx}
-              data-card
-              data-idx={idx}
-              className="group min-w-[320px] max-w-[360px] snap-center"
-            >
-              {/* Imagen flotante */}
+            <article key={idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
+              {/* Imagen flotante con sombra propia */}
               <div className="relative px-2">
-                {/* sombra elipse propia de la imagen */}
                 <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg" />
                 <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_12px_28px_rgba(0,0,0,0.10)] transition-all duration-300">
                   <Thumb src={it.image} alt={it.title} idx={idx} />
                 </div>
               </div>
 
-              {/* Tarjeta glass con sombra PROPIA (levita) */}
+              {/* Tarjeta glass con sombra propia */}
               <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/50 backdrop-blur-md px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)] hover:shadow-[0_16px_32px_rgba(0,0,0,0.12)] transition-shadow duration-300">
                 <header className="flex items-center justify-between text-[11px] text-gray-500 mb-1">
                   <div className="flex items-center gap-1">
@@ -222,11 +211,11 @@ const FALLBACKS = [
   // ETF / mercados
   'https://images.unsplash.com/photo-1593672715438-d88a70629abe?q=80&w=1600&auto=format&fit=crop',
   // USD / dólar fuerte
-  'https://images.unsplash.com/photo-1567427013953-356928ac6679?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop',
   // Bancos centrales / lingotes
-  'https://images.unsplash.com/photo-1610375382125-1e131b6f2d87?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1600&auto=format&fit=crop',
   // Minería / oferta
-  'https://images.unsplash.com/photo-1507306305530-7fbb3b9cd09f?q=80&w=1600&auto=format&fit=crop'
+  'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop'
 ];
 
 /* =================== Datos falsos (demo) =================== */

@@ -11,30 +11,25 @@ import { RefreshCcw } from 'lucide-react';
  *
  * Requisitos:
  *  - Usa las filas existentes del CSV (prop `rows` con objetos {date: Date, close, ...})
- *  - Rellena huecos desde el último día hasta HOY con Metals API a través de
- *    la función **fetchMissingDaysSequential** que ya tienes en tu dashboard.
- *  - Llama a `onAppendRows(newRows)` para que el padre actualice localStorage.
- *  - Muestra: fecha actual, último precio, Δ diaria y CAGR histórico (1971 -> último cierre).
- *  - Mini sparkline 60 días con tooltip “liquid glass”.
- *
- * Cálculo de CAGRs:
- *  - cagrAdmin: desde 1971-08-15 con Pini = 35 USD/oz (paridad admin. Bretton Woods)
- *  - cagrMarket: desde 1971-08-16 con Pini = primer cierre >= 1971-08-16 (si no hay, fallback 43.40)
+ *  - Rellena huecos desde el último día hasta HOY con una función de fetch (props.fetchMissingDaysSequential / Optimized)
+ *  - Llama a `onAppendRows(newRows)` para que el padre actualice caché local y PERSISTENCIA en GitHub.
+ *  - Muestra: fecha actual, último precio, Δ diaria y dos CAGRs 1971 (paridad 35 y 1er cierre).
+ *  - Sparkline 60 días con tooltip “liquid glass”.
  */
 
 const PALETTE = {
-  fill: '#C7D2FE',     // indigo-200
-  stroke: '#818CF8',   // indigo-400
-  accent: '#0ea5e9',   // sky-500
-  up: '#10b981',       // emerald-500
-  down: '#ef4444',     // rose-500
+  fill: '#C7D2FE',
+  stroke: '#818CF8',
+  accent: '#0ea5e9',
+  up: '#10b981',
+  down: '#ef4444',
   grid: 'rgba(0,0,0,0.06)'
 };
 
 export default function GoldNowSection({
   rows = [],
   onAppendRows,
-  fetchMissingDaysSequential,
+  fetchMissingDaysSequential, // o la versión optimizada
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -51,24 +46,23 @@ export default function GoldNowSection({
 
   const sparkData = useMemo(() => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })), [ordered]);
 
-  // Helpers para años y búsqueda de filas
+  // Helpers
   const yearsBetween = (a, b) => Math.max(0.0001, (b - a) / (365.25*24*3600*1000));
   const firstRowOnOrAfter = (d) => ordered.find(r => +r.date >= +d);
 
-  // --- CAGRs desde 1971 ---
+  // CAGRs 1971
   const cagrInfo = useMemo(() => {
     if (!ordered.length) return { cagrAdmin: null, cagrMarket: null, bases: {} };
-    const endRow = ordered[ordered.length-1];
-    const end = endRow.close;
+    const endRow = ordered[ordered.length-1]; const end = endRow.close;
     if (!Number.isFinite(end)) return { cagrAdmin: null, cagrMarket: null, bases: {} };
 
-    // Base A: 1971-08-15, Pini=35
+    // 1971-08-15 con Pini=35 (paridad administrada)
     const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
     const P_ADMIN = 35;
     const nAdmin = yearsBetween(BASE_ADMIN_DATE, endRow.date);
     const cagrAdmin = Math.pow(end / Math.max(P_ADMIN, 1e-9), 1/nAdmin) - 1;
 
-    // Base B: 1971-08-16, Pini = primer cierre >= 1971-08-16 (fallback 43.40)
+    // 1971-08-16 con Pini = primer cierre >= 1971-08-16 (fallback 43.40)
     const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
     const baseRow = firstRowOnOrAfter(BASE_MKT_DATE);
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
@@ -76,17 +70,10 @@ export default function GoldNowSection({
     const nMarket = yearsBetween(baseDateUsed, endRow.date);
     const cagrMarket = Math.pow(end / Math.max(P_MARKET, 1e-9), 1/nMarket) - 1;
 
-    return {
-      cagrAdmin, cagrMarket,
-      bases: {
-        admin: { pini: P_ADMIN, from: BASE_ADMIN_DATE },
-        market: { pini: P_MARKET, from: baseDateUsed },
-        end: { pfin: end, date: endRow.date }
-      }
-    };
+    return { cagrAdmin, cagrMarket };
   }, [ordered]);
 
-  // Días faltantes hasta hoy
+  // Días faltantes hasta hoy (auto-update al montar)
   const gapsToToday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
@@ -104,7 +91,7 @@ export default function GoldNowSection({
     try {
       const rowsNew = await fetchMissingDaysSequential(gapsToToday);
       if (rowsNew?.length && typeof onAppendRows === 'function') {
-        onAppendRows(rowsNew);
+        onAppendRows(rowsNew); // el padre también persistirá en GitHub
       }
       setLastFetchedAt(new Date());
     } catch (e) {
@@ -112,7 +99,7 @@ export default function GoldNowSection({
     } finally { setLoading(false); }
   }, [gapsToToday, onAppendRows, canFetch]);
 
-  useEffect(() => { updateNow(); /* auto al montar */ }, []); // eslint-disable-line
+  useEffect(() => { updateNow(); /* auto */ }, []); // eslint-disable-line
 
   const liveClose = lastClose;
   const delta = (Number.isFinite(liveClose) && Number.isFinite(prevClose)) ? (liveClose - prevClose) : null;
@@ -152,16 +139,8 @@ export default function GoldNowSection({
 
         {/* Chips liquid glass para CAGRs */}
         <div className="flex items-start justify-end gap-2">
-          <GlassChip
-            label="CAGR 1971 (35 USD)"
-            value={cagrInfo.cagrAdmin!=null ? `${(cagrInfo.cagrAdmin*100).toFixed(2)}%` : '—'}
-            tone={cagrInfo.cagrAdmin!=null ? (cagrInfo.cagrAdmin>=0?'pos':'neg') : 'neutral'}
-          />
-          <GlassChip
-            label="CAGR 1971 (1er cierre)"
-            value={cagrInfo.cagrMarket!=null ? `${(cagrInfo.cagrMarket*100).toFixed(2)}%` : '—'}
-            tone={cagrInfo.cagrMarket!=null ? (cagrInfo.cagrMarket>=0?'pos':'neg') : 'neutral'}
-          />
+          <GlassChip label="CAGR 1971 (35 USD)" value={cagrInfo.cagrAdmin!=null ? `${(cagrInfo.cagrAdmin*100).toFixed(2)}%` : '—'} tone={cagrInfo.cagrAdmin!=null ? (cagrInfo.cagrAdmin>=0?'pos':'neg') : 'neutral'} />
+          <GlassChip label="CAGR 1971 (1er cierre)" value={cagrInfo.cagrMarket!=null ? `${(cagrInfo.cagrMarket*100).toFixed(2)}%` : '—'} tone={cagrInfo.cagrMarket!=null ? (cagrInfo.cagrMarket>=0?'pos':'neg') : 'neutral'} />
         </div>
       </div>
 

@@ -3,18 +3,14 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ReferenceLine } from 'recharts';
 import { RefreshCcw } from 'lucide-react';
+import { fetchSpotLatest } from '../api.js';
 
 /**
  * GoldNowSection — Widget “Últimos datos del oro” (estética v6 + liquid glass)
  * -----------------------------------------------------------------------------
- * Colócalo justo debajo del bloque "CSV: data/xauusd_ohlc_clean.csv" en tu dashboard.
- *
- * Requisitos:
- *  - Usa las filas existentes del CSV (prop `rows` con objetos {date: Date, close, ...})
- *  - Rellena huecos desde el último día hasta HOY con una función de fetch (props.fetchMissingDaysSequential / Optimized)
- *  - Llama a `onAppendRows(newRows)` para que el padre actualice caché local y PERSISTENCIA en GitHub.
- *  - Muestra: fecha actual, último precio, Δ diaria y dos CAGRs 1971 (paridad 35 y 1er cierre).
- *  - Sparkline 60 días con tooltip “liquid glass”.
+ * - Rellena huecos OHLC solo HASTA AYER (no intenta hoy).
+ * - Añade precio SPOT (endpoint /latest) y refresco cada 60s.
+ * - onAppendRows persiste en LS y en GitHub (desde el padre).
  */
 
 const PALETTE = {
@@ -29,14 +25,19 @@ const PALETTE = {
 export default function GoldNowSection({
   rows = [],
   onAppendRows,
-  fetchMissingDaysSequential, // o la versión optimizada
+  fetchMissingDaysSequential, // recibirá la versión optimizada desde el padre
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
 
+  const [spot, setSpot] = useState(null);
+  const [spotTs, setSpotTs] = useState(null);
+  const [spotErr, setSpotErr] = useState('');
+
   const iso = (d) => d.toISOString().slice(0,10);
   const today = useMemo(() => new Date(new Date().toISOString().slice(0,10)), []); // UTC midnight
+  const yesterday = useMemo(() => { const d=new Date(today); d.setUTCDate(d.getUTCDate()-1); return d; }, [today]);
 
   const ordered = useMemo(() => (rows || []).slice().sort((a,b) => +a.date - +b.date), [rows]);
   const lastCsvDate = ordered.length ? ordered[ordered.length-1].date : null;
@@ -52,17 +53,14 @@ export default function GoldNowSection({
 
   // CAGRs 1971
   const cagrInfo = useMemo(() => {
-    if (!ordered.length) return { cagrAdmin: null, cagrMarket: null, bases: {} };
+    if (!ordered.length) return { cagrAdmin: null, cagrMarket: null };
     const endRow = ordered[ordered.length-1]; const end = endRow.close;
-    if (!Number.isFinite(end)) return { cagrAdmin: null, cagrMarket: null, bases: {} };
-
-    // 1971-08-15 con Pini=35 (paridad administrada)
+    if (!Number.isFinite(end)) return { cagrAdmin: null, cagrMarket: null };
     const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
     const P_ADMIN = 35;
     const nAdmin = yearsBetween(BASE_ADMIN_DATE, endRow.date);
     const cagrAdmin = Math.pow(end / Math.max(P_ADMIN, 1e-9), 1/nAdmin) - 1;
 
-    // 1971-08-16 con Pini = primer cierre >= 1971-08-16 (fallback 43.40)
     const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
     const baseRow = firstRowOnOrAfter(BASE_MKT_DATE);
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
@@ -73,33 +71,50 @@ export default function GoldNowSection({
     return { cagrAdmin, cagrMarket };
   }, [ordered]);
 
-  // Días faltantes hasta hoy (auto-update al montar)
-  const gapsToToday = useMemo(() => {
+  // Días faltantes solo HASTA AYER
+  const gapsToYesterday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
-    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000); d <= today; d = new Date(d.getTime() + 86400000)) {
+    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000); d <= yesterday; d = new Date(d.getTime() + 86400000)) {
       days.push(iso(d));
     }
     return days;
-  }, [lastCsvDate, today]);
+  }, [lastCsvDate, yesterday]);
 
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
   const updateNow = useCallback(async () => {
-    if (!canFetch || !gapsToToday.length) { setLastFetchedAt(new Date()); return; }
+    if (!canFetch || !gapsToYesterday.length) { setLastFetchedAt(new Date()); return; }
     setLoading(true); setError('');
     try {
-      const rowsNew = await fetchMissingDaysSequential(gapsToToday);
-      if (rowsNew?.length && typeof onAppendRows === 'function') {
-        onAppendRows(rowsNew); // el padre también persistirá en GitHub
-      }
+      const rowsNew = await fetchMissingDaysSequential(gapsToYesterday);
+      if (rowsNew?.length && typeof onAppendRows === 'function') onAppendRows(rowsNew);
       setLastFetchedAt(new Date());
     } catch (e) {
       setError(e?.message || 'No se pudo actualizar desde Metals API');
     } finally { setLoading(false); }
-  }, [gapsToToday, onAppendRows, canFetch]);
+  }, [gapsToYesterday, onAppendRows, canFetch]);
 
-  useEffect(() => { updateNow(); /* auto */ }, []); // eslint-disable-line
+  // Auto: rellena huecos hasta AYER al montar
+  useEffect(() => { updateNow(); }, []); // eslint-disable-line
+
+  // SPOT: polling cada 60s
+  useEffect(() => {
+    let stop = false, timer = null;
+    async function loadSpot() {
+      try {
+        const { price, ts } = await fetchSpotLatest();
+        if (stop) return;
+        setSpot(price); setSpotTs(new Date(ts)); setSpotErr('');
+      } catch (e) {
+        if (stop) return;
+        setSpotErr(e?.message || 'Spot no disponible');
+      }
+    }
+    loadSpot();
+    timer = setInterval(loadSpot, 60_000);
+    return () => { stop = true; if (timer) clearInterval(timer); };
+  }, []);
 
   const liveClose = lastClose;
   const delta = (Number.isFinite(liveClose) && Number.isFinite(prevClose)) ? (liveClose - prevClose) : null;
@@ -119,11 +134,12 @@ export default function GoldNowSection({
         </button>
       </div>
 
+      {/* Precio spot + último cierre */}
       <div className="grid gap-3 md:grid-cols-3">
-        <div className="md:col-span-2">
+        <div className="md:col-span-2 space-y-1">
           <div className="flex items-end gap-3">
             <div className="text-3xl font-bold tracking-tight">
-              {Number.isFinite(liveClose) ? liveClose.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'}
+              {Number.isFinite(spot) ? spot.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : (Number.isFinite(liveClose) ? liveClose.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—')}
             </div>
             {Number.isFinite(delta) && (
               <span className={`text-sm font-medium ${delta>=0?'text-emerald-600':'text-rose-600'}`}>
@@ -131,19 +147,22 @@ export default function GoldNowSection({
               </span>
             )}
           </div>
-          <div className="text-[11px] text-gray-500 mt-1">
-            {`Hoy ${iso(today)} · ${lastDateIso ? `último dato CSV: ${lastDateIso}` : ''}`} {lastFetchedAt && `· actualizado ${lastFetchedAt.toLocaleTimeString()}`}
-            {!canFetch && <span className="ml-2 text-amber-700">(API no disponible en este entorno)</span>}
+          <div className="text-[11px] text-gray-500">
+            {`Hoy ${iso(today)} · último cierre CSV: ${lastDateIso || '—'}`}
+            {spotTs && ` · spot ${spotTs.toLocaleTimeString()}`}
+            {spotErr && <span className="ml-2 text-amber-700">(Spot: {spotErr})</span>}
+            {lastFetchedAt && ` · OHLC actualizado ${lastFetchedAt.toLocaleTimeString()}`}
           </div>
         </div>
 
-        {/* Chips liquid glass para CAGRs */}
+        {/* Chips CAGRs */}
         <div className="flex items-start justify-end gap-2">
           <GlassChip label="CAGR 1971 (35 USD)" value={cagrInfo.cagrAdmin!=null ? `${(cagrInfo.cagrAdmin*100).toFixed(2)}%` : '—'} tone={cagrInfo.cagrAdmin!=null ? (cagrInfo.cagrAdmin>=0?'pos':'neg') : 'neutral'} />
           <GlassChip label="CAGR 1971 (1er cierre)" value={cagrInfo.cagrMarket!=null ? `${(cagrInfo.cagrMarket*100).toFixed(2)}%` : '—'} tone={cagrInfo.cagrMarket!=null ? (cagrInfo.cagrMarket>=0?'pos':'neg') : 'neutral'} />
         </div>
       </div>
 
+      {/* Sparkline */}
       <div className="mt-4 h-[160px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={sparkData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>

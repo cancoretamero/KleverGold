@@ -4,19 +4,31 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
 /**
- * GoldNewsGlassCarousel — v1.1
- * ---------------------------------------------------------
- * - Sombra sutil por tarjeta (levitación), SIN sombra de bloque.
- * - Carga robusta de imágenes: pre-carga, skeleton y fallbacks HD.
- * - Carrusel con scroll-snap, flechas y bullets.
- * - Datos falsos (FAKE_NEWS) para demo estética.
+ * GoldNewsGlassCarousel — v1.2
+ * - Scrollbar oculto (sin deslizador gris)
+ * - Sombra sutil por tarjeta (levita)
+ * - Posición inicial fija (por defecto 2ª tarjeta centrada)
+ * - Imágenes robustas (preload + skeleton + fallbacks)
+ * - Demo estética (datos falsos)
  */
-
-export default function GoldNewsGlassCarousel({ items }) {
+export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
   const data = useMemo(() => (items && items.length ? items : FAKE_NEWS), [items]);
   const wrapRef = useRef(null);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(initialIndex);
 
+  // Centrar tarjeta inicial
+  useEffect(() => {
+    const el = wrapRef.current; if (!el) return;
+    const card = el.querySelector('[data-card]');
+    if (!card) return;
+    const gap = 16;
+    const w = card.getBoundingClientRect().width;
+    const left = Math.max(0, initialIndex * (w + gap) - (el.clientWidth - w) / 2);
+    el.scrollLeft = left; // instant
+    setActive(initialIndex);
+  }, [data, initialIndex]);
+
+  // Track tarjeta visible
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
     const io = new IntersectionObserver((entries) => {
@@ -39,6 +51,12 @@ export default function GoldNewsGlassCarousel({ items }) {
 
   return (
     <section className="relative rounded-3xl border border-black/5 bg-white p-4">
+      {/* Oculta scrollbar para todos los navegadores */}
+      <style>{`
+        .news-scroll { -ms-overflow-style: none; scrollbar-width: none; }
+        .news-scroll::-webkit-scrollbar { display: none; height: 0; background: transparent; }
+      `}</style>
+
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
@@ -64,15 +82,15 @@ export default function GoldNewsGlassCarousel({ items }) {
           <ChevronRight className="w-5 h-5" />
         </button>
 
-        {/* Fades laterales muy suaves */}
+        {/* Fades laterales suaves */}
         <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-white to-transparent" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-white to-transparent" />
 
-        {/* Contenedor: sin sombra global */}
-        <div ref={wrapRef} className="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 px-16">
+        {/* Contenedor: oculta scrollbar (clase news-scroll) */}
+        <div ref={wrapRef} className="news-scroll flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 px-16">
           {data.map((it, idx) => (
             <article key={idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
-              {/* Imagen flotante con loader + fallbacks */}
+              {/* Imagen flotante */}
               <div className="relative px-2">
                 <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg" />
                 <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_12px_28px_rgba(0,0,0,0.10)] transition-shadow duration-300">
@@ -124,7 +142,7 @@ export default function GoldNewsGlassCarousel({ items }) {
   );
 }
 
-/* =================== Thumbnail robusto =================== */
+/* =============== Thumbnail robusto (preload + fallback) =============== */
 function Thumb({ src, alt, idx = 0 }) {
   const [okSrc, setOkSrc] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -136,7 +154,6 @@ function Thumb({ src, alt, idx = 0 }) {
     img.referrerPolicy = 'no-referrer';
     img.onload = () => { if (alive) { setOkSrc(candidate); setLoading(false); } };
     img.onerror = () => { if (alive) { setOkSrc(FALLBACKS[idx % FALLBACKS.length]); setLoading(false); } };
-    // si src vacío, fuerza fallback inmediato
     if (candidate) img.src = candidate; else { setOkSrc(FALLBACKS[idx % FALLBACKS.length]); setLoading(false); }
     return () => { alive = false; };
   }, [src, idx]);
@@ -181,13 +198,12 @@ function Meter({ label, value }) {
   );
 }
 
-/* =================== Utils =================== */
+/* =================== Utils & Fallbacks =================== */
 function labelSent(s){ const v=(s||'').toLowerCase(); if(['alcista','bullish'].includes(v)) return 'Alcista'; if(['bajista','bearish'].includes(v)) return 'Bajista'; return 'Neutro'; }
 function toneBySent(s){ const v=(s||'').toLowerCase(); if(['alcista','bullish'].includes(v)) return 'success'; if(['bajista','bearish'].includes(v)) return 'danger'; return 'secondary'; }
 function labelImpact(s){ const v=(s||'').toLowerCase(); if(v==='alto'||v==='high') return 'Alto'; if(v==='medio'||v==='medium') return 'Medio'; return 'Bajo'; }
 function toneByImpact(s){ const v=(s||'').toLowerCase(); if(v==='alto'||v==='high') return 'warning'; if(v==='medio'||v==='medium') return 'accent'; return 'secondary'; }
 
-/* =================== Fallbacks HD =================== */
 const FALLBACKS = [
   'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop',
   'https://images.unsplash.com/photo-1610375382125-1e131b6f2d87?q=80&w=1600&auto=format&fit=crop',
@@ -198,44 +214,9 @@ const FALLBACKS = [
 
 /* =================== Datos falsos (demo) =================== */
 const FAKE_NEWS = [
-  {
-    title: 'La Fed sugiere pausa larga; rendimientos reales ceden',
-    source: 'DemoWire', publishedAt: '2025-09-11',
-    sentiment: 'alcista', impact: 'alto', bias: 'bajo',
-    relevance: 0.86, confidence: 0.72,
-    reason: 'Menor coste de oportunidad favorece al oro; la renta fija pierde atractivo relativo.',
-    image: 'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop'
-  },
-  {
-    title: 'ETF de oro registran entradas por tercer día consecutivo',
-    source: 'DemoWire', publishedAt: '2025-09-10',
-    sentiment: 'alcista', impact: 'medio', bias: 'bajo',
-    relevance: 0.74, confidence: 0.65,
-    reason: 'Flujos positivos suelen apoyar el precio si se mantienen.',
-    image: 'https://images.unsplash.com/photo-1610375382125-1e131b6f2d87?q=80&w=1600&auto=format&fit=crop'
-  },
-  {
-    title: 'Dólar repunta tras sorpresas en empleo',
-    source: 'DemoWire', publishedAt: '2025-09-09',
-    sentiment: 'bajista', impact: 'medio', bias: 'medio',
-    relevance: 0.68, confidence: 0.6,
-    reason: 'Un USD más fuerte suele presionar a XAUUSD en el corto plazo.',
-    image: 'https://images.unsplash.com/photo-1603569283848-c6b0b4b2a941?q=80&w=1600&auto=format&fit=crop'
-  },
-  {
-    title: 'Compras oficiales de oro superan expectativas',
-    source: 'DemoWire', publishedAt: '2025-09-08',
-    sentiment: 'alcista', impact: 'alto', bias: 'bajo',
-    relevance: 0.81, confidence: 0.7,
-    reason: 'Demanda de bancos centrales añade soporte estructural.',
-    image: 'https://images.unsplash.com/photo-1607603750909-408e19386858?q=80&w=1600&auto=format&fit=crop'
-  },
-  {
-    title: 'Inventarios mineros: caída temporal por huelga',
-    source: 'DemoWire', publishedAt: '2025-09-07',
-    sentiment: 'alcista', impact: 'medio', bias: 'medio',
-    relevance: 0.62, confidence: 0.55,
-    reason: 'Riesgo de oferta puede tensar el mercado spot si se prolonga.',
-    image: 'https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?q=80&w=1600&auto=format&fit=crop'
-  }
+  { title:'La Fed sugiere pausa larga; rendimientos reales ceden', source:'DemoWire', publishedAt:'2025-09-11', sentiment:'alcista', impact:'alto', bias:'bajo', relevance:0.86, confidence:0.72, reason:'Menor coste de oportunidad favorece al oro; la renta fija pierde atractivo relativo.', image:FALLBACKS[0] },
+  { title:'ETF de oro registran entradas por tercer día consecutivo', source:'DemoWire', publishedAt:'2025-09-10', sentiment:'alcista', impact:'medio', bias:'bajo', relevance:0.74, confidence:0.65, reason:'Flujos positivos suelen apoyar el precio si se mantienen.', image:FALLBACKS[1] },
+  { title:'Dólar repunta tras sorpresas en empleo', source:'DemoWire', publishedAt:'2025-09-09', sentiment:'bajista', impact:'medio', bias:'medio', relevance:0.68, confidence:0.6, reason:'Un USD más fuerte suele presionar a XAUUSD en el corto plazo.', image:FALLBACKS[2] },
+  { title:'Compras oficiales de oro superan expectativas', source:'DemoWire', publishedAt:'2025-09-08', sentiment:'alcista', impact:'alto', bias:'bajo', relevance:0.81, confidence:0.7, reason:'Demanda de bancos centrales añade soporte estructural.', image:FALLBACKS[3] },
+  { title:'Inventarios mineros: caída temporal por huelga', source:'DemoWire', publishedAt:'2025-09-07', sentiment:'alcista', impact:'medio', bias:'medio', relevance:0.62, confidence:0.55, reason:'Riesgo de oferta puede tensar el mercado spot si se prolonga.', image:FALLBACKS[4] }
 ];

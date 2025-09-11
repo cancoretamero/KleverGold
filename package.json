@@ -15,7 +15,12 @@
     "papaparse": "^5.4.1",
     "lucide-react": "^0.441.0",
     "klinecharts": "^9.8.8",
-    "lightweight-charts": "^4.2.1"
+    "lightweight-charts": "^4.2.1",
+  "rss-parser": "^3.13.0",
+  "node-fetch": "2.7.0",
+  "metascraper": "^5.45.25",
+  "metascraper-url": "^5.45.25",
+  "metascraper-image": "^5.45.25"
   },
   "devDependencies": {
     "vite": "^5.4.0",

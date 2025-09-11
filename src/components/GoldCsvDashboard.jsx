@@ -18,6 +18,8 @@ import ModernHistograms from './ModernHistograms.jsx'   // v7 funcional (Media/M
 import GoldNowSection from './GoldNowSection.jsx'
 // NUEVO: velas modernas con tooltip liquid-glass (Lightweight)
 import { CandlePanelModern } from './ModernCandleAndRange.jsx'
+// NUEVO: logo imagen
+import kleverLogo from '../assets/klevergold.png'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -233,7 +235,18 @@ export default function GoldCsvDashboard() {
   return (
     <div className="p-6 space-y-6">
       <header className="flex flex-wrap gap-3 justify-between items-center">
-        <h1 className="text-2xl font-bold">Dashboard de Oro</h1>
+        {/* LOGO imagen en vez de título */}
+        <a href="/" className="flex items-center gap-3" title="KleverGold">
+          <img
+            src={kleverLogo}         /* si lo pusiste en src/assets */
+            // src="/klevergold.png"  /* usa esta línea si lo pusiste en /public */
+            alt="KleverGold"
+            className="h-8 md:h-10 w-auto select-none"
+            draggable={false}
+            decoding="async"
+          />
+        </a>
+
         {meta && (
           <div className="text-xs text-gray-700 bg-gray-100 rounded-md px-3 py-2 inline-flex items-center gap-2">
             <Database className="w-4 h-4" />
@@ -259,7 +272,7 @@ export default function GoldCsvDashboard() {
         <div className="ml-auto text-xs text-gray-500">API key {CONFIG.API_KEY ? "presente" : "ausente"}</div>
       </section>
 
-      {/* === NUEVA SECCIÓN: “Últimos datos del oro” (debajo del CSV) === */}
+      {/* === “Últimos datos del oro” === */}
       <GoldNowSection
         rows={rows}
         fetchMissingDaysSequential={fetchMissingDaysOptimized}

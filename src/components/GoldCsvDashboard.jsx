@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Brush, ReferenceLine } from 'recharts'
+ import React, { useMemo, useState, useEffect } from 'react'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Brush, ReferenceLine } from 'recharts'
 import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload } from "lucide-react"
 import CandleChart from './CandleChart.jsx'
 import Kpi from './Kpi.jsx'
@@ -16,6 +16,8 @@ import HScrollCarousel from './HScrollCarousel.jsx'
 import ModernHistograms from './ModernHistograms.jsx'   // v7 funcional (Media/Mediana + detalle multi-año)
 // NUEVO: widget de últimos datos (liquid-glass + sparkline)
 import GoldNowSection from './GoldNowSection.jsx'
+// NUEVO: velas modernas con tooltip liquid-glass (Lightweight)
+import { CandlePanelModern } from './ModernCandleAndRange.jsx'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -35,7 +37,7 @@ export default function GoldCsvDashboard() {
   const [monthFocus, setMonthFocus] = useState(null);
   const [filterOutliers, setFilterOutliers] = useState(true); // p99
   const [selectedDay, setSelectedDay] = useState(null);
-  const [monthlyStat, setMonthlyStat] = useState('avg');      // 'avg' | 'median'  <-- ahora controla el hijo
+  const [monthlyStat, setMonthlyStat] = useState('avg');      // 'avg' | 'median'
 
   // 0) Carga automática del CSV limpio si existe URL
   useEffect(() => {
@@ -273,7 +275,82 @@ export default function GoldCsvDashboard() {
 
       {baseRows.length > 0 && (
         <>
-          <div className="rounded-2xl border bg-white p-4 flex flex-wrap items-end gap-3">
+          {/* KPIs */}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {kpis && (
+              <>
+                <Kpi icon={Gauge} label="Variación media diaria" value={kpis.avg.toFixed(2)} hint="High-Low promedio" />
+                <Kpi icon={Maximize2} label="Máxima variación diaria" value={kpis.maxR.toFixed(2)} hint={kpis.maxRow.date.toISOString().slice(0, 10)} />
+                <Kpi icon={TrendingUp} label="Mes más volátil" value={kpis.monthly.slice().sort((a, b) => b.avg - a.avg)[0]?.month || "—"} />
+                <Kpi icon={Calendar} label="Días" value={kpis.days} />
+              </>
+            )}
+          </div>
+
+          {/* ModernHistograms v7 */}
+          <section className="border rounded-2xl p-4 bg-white space-y-4">
+            <div className="space-y-3">
+              <YearGroupSelector years={yearsAvailable} selectedYears={selectedYears} onChange={(ys) => setSelectedYears(ys)} />
+              <div className="flex items-center gap-2 justify-end">
+                <label className="text-xs text-gray-500">Año foco</label>
+                <select value={yearFocus ?? ''} onChange={(e) => setYearFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
+                  {yearsAvailable.map((y) => (<option value={y} key={y}>{y}</option>))}
+                </select>
+                <label className="text-xs text-gray-500">Mes</label>
+                <select value={monthFocus ?? ''} onChange={(e) => setMonthFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (<option key={m} value={m}>{String(m).padStart(2, '0')}</option>))}
+                </select>
+                <label className="text-xs text-gray-500 inline-flex items-center gap-1">
+                  <input type="checkbox" className="accent-indigo-600" checked={filterOutliers} onChange={(e) => setFilterOutliers(e.target.checked)} />
+                  Filtro outliers p99
+                </label>
+              </div>
+            </div>
+
+            <HScrollCarousel itemWidth={280} ariaLabel="KPIs por año">
+              {selectedYears.map((y) => {
+                const s = yearSummaries.get(y);
+                if (!s) return null;
+                return (
+                  <Kpi key={y} icon={Gauge} label={`Media diaria ${y}`} value={s.avg.toFixed(2)} hint={`Días: ${s.days} · Máx: ${s.maxRow.range.toFixed(2)} (${s.maxRow.date.toISOString().slice(0,10)})`} />
+                );
+              })}
+            </HScrollCarousel>
+
+            <ModernHistograms
+              rawRows={analysisPool}
+              years={selectedYears}
+              dailyValueKey="range"
+              title="Comparativa anual"
+              stat={monthlyStat}
+              onStatChange={setMonthlyStat}
+              initialMonth={monthFocus}
+              onDailyBarClick={(p) => setSelectedDay(p)}
+            />
+
+            {selectedDay && (
+              <div className="p-4 rounded-2xl border bg-gray-50 text-sm">
+                <div className="font-semibold mb-2">
+                  Día seleccionado: {String(selectedDay.day).padStart(2,'0')}
+                  {monthFocus ? `/${String(monthFocus).padStart(2,'0')}` : ''}
+                </div>
+                <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {selectedYears.map(y => {
+                    const v = selectedDay[String(y)];
+                    return (
+                      <div key={y} className="flex items-center justify-between rounded-md border bg-white px-2 py-1">
+                        <span className="text-gray-600">{y}</span>
+                        <span className="font-semibold">{Number.isFinite(v) ? v.toFixed(2) : '—'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Controles (mismos handlers) justo encima de Velas */}
+          <div className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4 flex flex-wrap items-end gap-3">
             <div className="flex items-center gap-1 flex-wrap">
               {[
                 { k: "1m", l: "1m" },
@@ -288,146 +365,70 @@ export default function GoldCsvDashboard() {
                 <button
                   key={b.k}
                   onClick={() => setRangeKey(b.k)}
-                  className={`px-2.5 py-1.5 text-xs rounded-md border ${rangeKey === b.k ? "bg-indigo-600 text-white border-indigo-600" : "bg-white hover:bg-gray-50"}`}
+                  className={`px-2.5 py-1.5 text-xs rounded-full border ${rangeKey === b.k ? "bg-indigo-600 text-white border-indigo-600" : "bg-white hover:bg-gray-50"}`}
                 >
                   {b.l}
                 </button>
               ))}
             </div>
+
             {rangeKey === "custom" && (
               <div className="flex items-end gap-2 ml-2">
                 <div className="flex flex-col text-xs"><label>Desde</label><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="px-2 py-1 border rounded" /></div>
                 <div className="flex flex-col text-xs"><label>Hasta</label><input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="px-2 py-1 border rounded" /></div>
               </div>
             )}
+
             <div className="ml-auto flex items-center gap-2">
               {gaps.length > 0 && (
-                <button onClick={fillGaps} disabled={filling} className="px-2 py-1.5 rounded-md border text-sm inline-flex items-center gap-2 bg-emerald-600 text-white disabled:opacity-50">
+                <button onClick={fillGaps} disabled={filling} className="px-3 py-1.5 rounded-full text-sm inline-flex items-center gap-2 bg-emerald-600 text-white disabled:opacity-50">
                   Completar huecos ({gaps.length})
                 </button>
               )}
-              <label className="text-xs text-gray-500">Motor</label>
-              <select value={engine} onChange={(e) => setEngine(e.target.value)} className="px-2 py-1.5 rounded-md border text-sm">
-                <option value="auto">Auto</option>
-                <option value="kline">KLine</option>
-                <option value="lwc">Lightweight</option>
-              </select>
-              <label className="text-xs text-gray-500">Modo</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value)} className="px-2 py-1.5 rounded-md border text-sm">
-                <option value="candlestick">Candlestick</option>
-                <option value="ohlc">OHLC</option>
-                <option value="area">Área</option>
-              </select>
-              <button onClick={() => setFitNonce((n) => n + 1)} className="px-2 py-1.5 rounded-md border text-sm inline-flex items-center gap-1">
-                <RefreshCcw className="w-3.5 h-3.5" />Reset vista
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Motor</span>
+                <select value={engine} onChange={(e) => setEngine(e.target.value)} className="px-2 py-1.5 rounded-md border text-sm">
+                  <option value="auto">Auto</option>
+                  <option value="lwc">Lightweight</option>
+                  <option value="kline">KLine</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Modo</span>
+                <select value={mode} onChange={(e) => setMode(e.target.value)} className="px-2 py-1.5 rounded-md border text-sm">
+                  <option value="candlestick">Candlestick</option>
+                  <option value="ohlc">OHLC</option>
+                  <option value="area">Área</option>
+                </select>
+              </div>
+
+              <button onClick={() => setFitNonce((n) => n + 1)} className="px-3 py-1.5 rounded-full border text-sm inline-flex items-center gap-1" title="Reset vista">
+                <RefreshCcw className="w-3.5 h-3.5" /> Reset vista
               </button>
             </div>
           </div>
 
-          {kpis && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Kpi icon={Gauge} label="Variación media diaria" value={kpis.avg.toFixed(2)} hint="High-Low promedio" />
-              <Kpi icon={Maximize2} label="Máxima variación diaria" value={kpis.maxR.toFixed(2)} hint={kpis.maxRow.date.toISOString().slice(0, 10)} />
-              <Kpi icon={TrendingUp} label="Mes más volátil" value={kpis.monthly.slice().sort((a, b) => b.avg - a.avg)[0]?.month || "—"} />
-              <Kpi icon={Calendar} label="Días" value={kpis.days} />
-            </div>
-          )}
-        </>
-      )}
-
-      {baseRows.length > 0 && (
-        <section className="border rounded-2xl p-4 bg-white space-y-4">
-          {/* === CONTROLES NUEVOS: selector compacto + focos === */}
-          <div className="space-y-3">
-            <YearGroupSelector
-              years={yearsAvailable}
-              selectedYears={selectedYears}
-              onChange={(ys) => setSelectedYears(ys)}
-            />
-            <div className="flex items-center gap-2 justify-end">
-              <label className="text-xs text-gray-500">Año foco</label>
-              <select value={yearFocus ?? ''} onChange={(e) => setYearFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
-                {yearsAvailable.map((y) => (<option value={y} key={y}>{y}</option>))}
-              </select>
-              <label className="text-xs text-gray-500">Mes</label>
-              <select value={monthFocus ?? ''} onChange={(e) => setMonthFocus(Number(e.target.value))} className="px-2 py-1.5 rounded-md border text-sm">
-                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (<option key={m} value={m}>{String(m).padStart(2, '0')}</option>))}
-              </select>
-              <label className="text-xs text-gray-500 inline-flex items-center gap-1">
-                <input type="checkbox" className="accent-indigo-600" checked={filterOutliers} onChange={(e) => setFilterOutliers(e.target.checked)} />
-                Filtro outliers p99
-              </label>
-            </div>
-          </div>
-
-          {/* Resumen por año seleccionado */}
-          <HScrollCarousel itemWidth={280} ariaLabel="KPIs por año">
-            {selectedYears.map((y) => {
-              const s = yearSummaries.get(y);
-              if (!s) return null;
-              return (
-                <Kpi
-                  key={y}
-                  icon={Gauge}
-                  label={`Media diaria ${y}`}
-                  value={s.avg.toFixed(2)}
-                  hint={`Días: ${s.days} · Máx: ${s.maxRow.range.toFixed(2)} (${s.maxRow.date.toISOString().slice(0,10)})`}
-                />
-              );
-            })}
-          </HScrollCarousel>
-
-          {/* ==== Reemplazo por ModernHistograms v7 (funcional) ==== */}
-          <ModernHistograms
-            rawRows={analysisPool}                 // filas crudas filtradas por años
-            years={selectedYears}                  // años seleccionados en tu UI
-            dailyValueKey="range"
-            title="Comparativa anual"              // renombrado
-            stat={monthlyStat}                     // 'avg' | 'median'
-            onStatChange={setMonthlyStat}
-            initialMonth={monthFocus}
-            onDailyBarClick={(p) => setSelectedDay(p)}
-          />
-
-          {/* Panel de detalles por día: ahora lista valores por año del día clicado */}
-          {selectedDay && (
-            <div className="p-4 rounded-2xl border bg-gray-50 text-sm">
-              <div className="font-semibold mb-2">
-                Día seleccionado: {String(selectedDay.day).padStart(2,'0')}
-                {monthFocus ? `/${String(monthFocus).padStart(2,'0')}` : ''}
-              </div>
-              <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                {selectedYears.map(y => {
-                  const v = selectedDay[String(y)];
-                  return (
-                    <div key={y} className="flex items-center justify-between rounded-md border bg-white px-2 py-1">
-                      <span className="text-gray-600">{y}</span>
-                      <span className="font-semibold">{Number.isFinite(v) ? v.toFixed(2) : '—'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {baseRows.length > 0 && (
-        <>
-          <section className="border rounded-2xl p-4 bg-white">
+          {/* Velas: versión moderna si engine=auto|lwc; si no, fallback a CandleChart */}
+          <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
             <h3 className="font-semibold mb-2">Velas</h3>
-            <CandleChart data={candleRows} height={420} engine={engine} mode={mode} fitNonce={fitNonce} />
+            {(engine === 'lwc' || engine === 'auto')
+              ? <CandlePanelModern data={candleRows} title="Velas" height={420} />
+              : <CandleChart data={candleRows} height={420} engine={engine} mode={mode} fitNonce={fitNonce} />
+            }
           </section>
 
-          <section className="border rounded-2xl p-4 bg-white">
+          {/* Variación diaria (card v6 + glass tooltip) */}
+          <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
             <h3 className="font-semibold mb-2">Variación diaria (High−Low)</h3>
             <div className="w-full h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={filtered.map((r) => ({ date: r.date.toISOString().slice(0, 10), range: r.range }))} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 6" stroke="rgba(0,0,0,0.06)" />
                   <XAxis dataKey="date" minTickGap={24} />
                   <YAxis domain={["auto", "auto"]} />
-                  <Tooltip formatter={(v) => [`${Number(v).toFixed(2)} USD`, "Rango"]} />
+                  <RTooltip cursor={false} content={<GlassTooltip />} />
                   <Line type="monotone" dataKey="range" dot={false} strokeWidth={1.5} />
                   <Brush height={24} travellerWidth={8} />
                   <ReferenceLine y={kpis?.avg ?? 0} strokeDasharray="4 4" label={{ value: "Media", position: "insideTopRight" }} />
@@ -436,12 +437,31 @@ export default function GoldCsvDashboard() {
             </div>
           </section>
 
-          <section className="border rounded-2xl p-4 bg-white">
+          {/* Top 15 */}
+          <section className="rounded-2xl border bg-white p-4">
             <h3 className="font-semibold mb-2">Top 15 días por rango</h3>
             <TopTable rows={filtered.slice().sort((a, b) => b.range - a.range).slice(0, 15)} />
           </section>
         </>
       )}
+    </div>
+  );
+}
+
+/* Tooltip “liquid glass” para el LineChart */
+function GlassTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const v = payload[0]?.value;
+  return (
+    <div
+      className="relative min-w-[180px] rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.6)]"
+      style={{ backdropFilter: 'blur(14px) saturate(170%)', WebkitBackdropFilter: 'blur(14px) saturate(170%)' }}
+    >
+      <div className="p-2">
+        <div className="font-medium text-gray-900/90">{label}</div>
+        <div className="text-right font-semibold text-gray-900/90">{Number.isFinite(v)? Number(v).toFixed(2): '—'}</div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
     </div>
   );
 }

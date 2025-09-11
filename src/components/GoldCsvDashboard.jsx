@@ -13,7 +13,7 @@ import { loadExtraFromLS, saveExtraToLS, mapByDate, rowsFromMap } from '../stora
 // NUEVOS imports
 import YearGroupSelector from './YearGroupSelector.jsx'
 import HScrollCarousel from './HScrollCarousel.jsx'
-import ModernHistograms from './ModernHistograms.jsx'
+import ModernHistograms from './ModernHistograms.jsx'   // v7 funcional (Media/Mediana + detalle multi-año)
 // NUEVO: widget de últimos datos (liquid-glass + sparkline)
 import GoldNowSection from './GoldNowSection.jsx'
 
@@ -35,7 +35,7 @@ export default function GoldCsvDashboard() {
   const [monthFocus, setMonthFocus] = useState(null);
   const [filterOutliers, setFilterOutliers] = useState(true); // p99
   const [selectedDay, setSelectedDay] = useState(null);
-  const [monthlyStat, setMonthlyStat] = useState('avg');
+  const [monthlyStat, setMonthlyStat] = useState('avg');      // 'avg' | 'median'  <-- ahora controla el hijo
 
   // 0) Carga automática del CSV limpio si existe URL
   useEffect(() => {
@@ -377,28 +377,35 @@ export default function GoldCsvDashboard() {
             })}
           </HScrollCarousel>
 
-          {/* ==== AQUI cambiamos ambos BarChart por el componente nuevo ==== */}
+          {/* ==== Reemplazo por ModernHistograms v7 (funcional) ==== */}
           <ModernHistograms
-            monthlyComparative={monthlyComparative}
-            years={selectedYears}
-            dailyMonth={dailyMonth}
+            rawRows={analysisPool}                 // filas crudas filtradas por años
+            years={selectedYears}                  // años seleccionados en tu UI
             dailyValueKey="range"
-            title="Comparativa mensual"
-            statLabel={monthlyStat === 'median' ? 'Mediana' : 'Media'}
-            heightMonthly={360}
-            heightDaily={320}
+            title="Comparativa anual"              // renombrado
+            stat={monthlyStat}                     // 'avg' | 'median'
+            onStatChange={setMonthlyStat}
+            initialMonth={monthFocus}
             onDailyBarClick={(p) => setSelectedDay(p)}
           />
 
+          {/* Panel de detalles por día: ahora lista valores por año del día clicado */}
           {selectedDay && (
             <div className="p-4 rounded-2xl border bg-gray-50 text-sm">
-              <div className="font-semibold mb-1">Día seleccionado: {selectedDay.dateLabel}</div>
-              <div className="flex flex-wrap gap-4">
-                <div>Open: <strong>{selectedDay.open}</strong></div>
-                <div>High: <strong>{selectedDay.high}</strong></div>
-                <div>Low: <strong>{selectedDay.low}</strong></div>
-                <div>Close: <strong>{selectedDay.close}</strong></div>
-                <div>Rango: <strong>{selectedDay.range.toFixed(2)}</strong></div>
+              <div className="font-semibold mb-2">
+                Día seleccionado: {String(selectedDay.day).padStart(2,'0')}
+                {monthFocus ? `/${String(monthFocus).padStart(2,'0')}` : ''}
+              </div>
+              <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                {selectedYears.map(y => {
+                  const v = selectedDay[String(y)];
+                  return (
+                    <div key={y} className="flex items-center justify-between rounded-md border bg-white px-2 py-1">
+                      <span className="text-gray-600">{y}</span>
+                      <span className="font-semibold">{Number.isFinite(v) ? v.toFixed(2) : '—'}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

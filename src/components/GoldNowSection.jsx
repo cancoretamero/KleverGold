@@ -5,24 +5,19 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tool
 import { RefreshCcw } from 'lucide-react';
 import { CONFIG } from '../config.js';
 
-const PALETTE = { fill:'#C7D2FE', stroke:'#818CF8', accent:'#0ea5e9', up:'#10b981', down:'#ef4444', grid:'rgba(0,0,0,0.06)' };
-
 /* ===================== SPOT robusto ===================== */
 async function httpJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }
 function n(x){ const v = Number(x); return Number.isFinite(v) ? v : NaN; }
 
-/** Intenta varios formatos habituales y normaliza a USD por XAU (USD/oz) */
+/** Intenta varios formatos y normaliza a USD por XAU (USD/oz) */
 async function fetchSpotLatestRobust() {
   if (!CONFIG.API_KEY) throw new Error('Falta API key');
   const SYM = CONFIG.SYMBOL || 'XAUUSD';
   const base = 'USD';
   const candidates = [
-    // pares directos
     new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=${SYM}`),
     new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=${SYM}`),
-    // XAU con base USD (metals-api clásico): devuelve XAU POR USD → invertimos
     new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&base=${base}&symbols=XAU`),
-    // Variantes minimalistas
     new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=XAU`),
     new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=XAU`),
   ];
@@ -43,23 +38,18 @@ async function fetchSpotLatestRobust() {
 function deriveUSDperXAU(j){
   let price = NaN; let ts = Date.now();
 
-  // 1) pares directos
   if (j?.rates) {
-    // XAUUSD directo
     if (n(j.rates.XAUUSD)) price = n(j.rates.XAUUSD);
-    // USDXAU => invertido
     else if (n(j.rates.USDXAU)) price = 1 / n(j.rates.USDXAU);
-    // base, cruce
     else {
       const base = j.base || j.source || '';
       const rXAU = n(j.rates.XAU);
       const rUSD = n(j.rates.USD);
-      if (base === 'USD' && Number.isFinite(rXAU)) price = 1 / rXAU;                  // XAU por USD → invierte
-      else if (base === 'XAU' && Number.isFinite(rUSD)) price = rUSD;                 // USD por XAU
-      else if (Number.isFinite(rUSD) && Number.isFinite(rXAU)) price = rUSD / rXAU;   // USD/base ÷ XAU/base
+      if (base === 'USD' && Number.isFinite(rXAU)) price = 1 / rXAU;
+      else if (base === 'XAU' && Number.isFinite(rUSD)) price = rUSD;
+      else if (Number.isFinite(rUSD) && Number.isFinite(rXAU)) price = rUSD / rXAU;
     }
   } else if (j?.quotes) {
-    // currencylayer-like
     if (n(j.quotes.XAUUSD)) price = n(j.quotes.XAUUSD);
     else if (n(j.quotes.USDXAU)) price = 1 / n(j.quotes.USDXAU);
   } else if (n(j.rate)) {
@@ -67,23 +57,22 @@ function deriveUSDperXAU(j){
   } else if (n(j.price)) {
     price = n(j.price);
   } else if (j?.data) {
-    // algunos devuelven { data: { XAUUSD: { price: ... } } }
     if (n(j.data?.XAUUSD)) price = n(j.data.XAUUSD);
     else if (n(j.data?.price)) price = n(j.data.price);
   }
 
-  // timestamp opcional
   if (j?.timestamp) ts = Number(j.timestamp) * 1000;
   else if (j?.date) { const d = Date.parse(j.date); if (!Number.isNaN(d)) ts = d; }
 
-  // Heurística: si es muy pequeño pero > 0 (p.ej. 0.00028 XAU por USD) → invierte
   if (!Number.isFinite(price) || price <= 0) return { price: NaN, ts };
-  if (price < 10) price = 1 / price;
+  if (price < 10) price = 1 / price; // heurística típico invertido
 
   return { price, ts };
 }
 
 /* ===================== componente ===================== */
+const PALETTE = { fill:'#C7D2FE', stroke:'#818CF8', accent:'#0ea5e9', up:'#10b981', down:'#ef4444', grid:'rgba(0,0,0,0.06)' };
+
 export default function GoldNowSection({
   rows = [],
   onAppendRows,
@@ -109,27 +98,32 @@ export default function GoldNowSection({
 
   const sparkData = useMemo(() => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })), [ordered]);
 
-  // Helpers CAGR
+  // Helpers
   const yearsBetween = (a, b) => Math.max(0.0001, (b - a) / (365.25*24*3600*1000));
   const firstRowOnOrAfter = (d) => ordered.find(r => +r.date >= +d);
+
+  // ====== CAGRs 1971 (AHORA USAN SPOT SI EXISTE) ======
   const { cagrAdmin, cagrMarket } = useMemo(() => {
-    if (!ordered.length) return { cagrAdmin: null, cagrMarket: null };
-    const endRow = ordered[ordered.length-1]; const end = endRow.close;
-    if (!Number.isFinite(end)) return { cagrAdmin: null, cagrMarket: null };
+    // precio final y fecha final — si hay spot lo usamos, si no el último cierre
+    const endPrice = Number.isFinite(spot) ? spot : (ordered[ordered.length-1]?.close ?? NaN);
+    const endDate  = Number.isFinite(spot) ? (spotTs || today) : (ordered[ordered.length-1]?.date ?? today);
+    if (!Number.isFinite(endPrice)) return { cagrAdmin: null, cagrMarket: null };
 
+    // 1971-08-15 con Pini=35 (paridad administrada)
     const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
-    const nAdmin = yearsBetween(BASE_ADMIN_DATE, endRow.date);
-    const cagrAdmin = Math.pow(end / 35, 1/nAdmin) - 1;
+    const nAdmin = yearsBetween(BASE_ADMIN_DATE, endDate);
+    const cagrAdmin = Math.pow(endPrice / 35, 1/nAdmin) - 1;
 
+    // 1971-08-16 con Pini = primer cierre >= 1971-08-16 (fallback 43.40)
     const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
     const baseRow = firstRowOnOrAfter(BASE_MKT_DATE);
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
     const baseDateUsed = baseRow?.date || BASE_MKT_DATE;
-    const nMarket = yearsBetween(baseDateUsed, endRow.date);
-    const cagrMarket = Math.pow(end / Math.max(P_MARKET,1e-9), 1/nMarket) - 1;
+    const nMarket = yearsBetween(baseDateUsed, endDate);
+    const cagrMarket = Math.pow(endPrice / Math.max(P_MARKET,1e-9), 1/nMarket) - 1;
 
     return { cagrAdmin, cagrMarket };
-  }, [ordered]);
+  }, [ordered, spot, spotTs, today]);
 
   // Días faltantes solo HASTA AYER
   const gapsToYesterday = useMemo(() => {
@@ -143,7 +137,7 @@ export default function GoldNowSection({
 
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
-  // SPOT: petición robusta
+  // SPOT
   const refreshSpot = useCallback(async () => {
     try { const { price, ts } = await fetchSpotLatestRobust(); setSpot(price); setSpotTs(new Date(ts)); setSpotErr(''); }
     catch (e) { setSpotErr(String(e?.message || e)); }
@@ -153,7 +147,7 @@ export default function GoldNowSection({
   const updateNow = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      await refreshSpot();
+      await refreshSpot(); // spot al instante
       if (canFetch && gapsToYesterday.length) {
         const rowsNew = await fetchMissingDaysSequential(gapsToYesterday);
         if (rowsNew?.length && typeof onAppendRows === 'function') onAppendRows(rowsNew);
@@ -163,9 +157,9 @@ export default function GoldNowSection({
     finally { setLoading(false); }
   }, [refreshSpot, canFetch, gapsToYesterday, onAppendRows]);
 
-  // Auto: rellena huecos (hasta AYER) y primera carga de spot
+  // Auto: rellena huecos y primer spot
   useEffect(() => { updateNow(); }, []); // eslint-disable-line
-  // Polling de spot cada 60s
+  // Polling spot
   useEffect(() => { const id = setInterval(refreshSpot, 60_000); return () => clearInterval(id); }, [refreshSpot]);
 
   const displayPrice = Number.isFinite(spot) ? spot : (Number.isFinite(lastClose) ? lastClose : null);

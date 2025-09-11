@@ -20,6 +20,8 @@ import GoldNowSection from './GoldNowSection.jsx'
 import { CandlePanelModern } from './ModernCandleAndRange.jsx'
 // NUEVO: logo imagen
 import kleverLogo from '../assets/klevergold.png'
+// NUEVO: carrusel de noticias (demo estética, datos falsos)
+import GoldNewsGlassCarousel from './GoldNewsGlassCarousel.jsx'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -286,6 +288,9 @@ export default function GoldCsvDashboard() {
           persistRowsToRepo(rowsNew).catch(()=>{});
         }}
       />
+
+      {/* === Noticias relevantes (demo estética, debajo de Últimos datos) === */}
+      <GoldNewsGlassCarousel />
 
       {needCsv && <CsvLoader onData={onCsvUpload} />}
 

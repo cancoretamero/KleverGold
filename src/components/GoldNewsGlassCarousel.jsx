@@ -1,15 +1,15 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, ChevronLeft, ChevronRight, Sparkles, Brain, TrendingUp } from 'lucide-react';
+import { ExternalLink, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 
 /**
- * GoldNewsGlassCarousel — v1 (demo estética)
+ * GoldNewsGlassCarousel — v1.1
  * ---------------------------------------------------------
- * - Carrusel horizontal con efecto "liquid glass"
- * - Tarjetas flotantes con: sesgo, relevancia, impacto, sentimiento, razón breve
- * - Datos falsos (FAKE_NEWS) para previsualizar diseño
- * - Scroll-snap + flechas + bullets
+ * - Sombra sutil por tarjeta (levitación), SIN sombra de bloque.
+ * - Carga robusta de imágenes: pre-carga, skeleton y fallbacks HD.
+ * - Carrusel con scroll-snap, flechas y bullets.
+ * - Datos falsos (FAKE_NEWS) para demo estética.
  */
 
 export default function GoldNewsGlassCarousel({ items }) {
@@ -20,24 +20,25 @@ export default function GoldNewsGlassCarousel({ items }) {
   useEffect(() => {
     const el = wrapRef.current; if (!el) return;
     const io = new IntersectionObserver((entries) => {
-      const vis = entries.filter(e=>e.isIntersecting)
-        .map(e=>({ idx: Number(e.target.getAttribute('data-idx')), ratio: e.intersectionRatio }))
-        .sort((a,b)=> b.ratio - a.ratio);
+      const vis = entries
+        .filter(e => e.isIntersecting)
+        .map(e => ({ idx: Number(e.target.getAttribute('data-idx')), ratio: e.intersectionRatio }))
+        .sort((a, b) => b.ratio - a.ratio);
       if (vis[0]) setActive(vis[0].idx);
-    }, { root: el, threshold: [0.6,0.8,1] });
+    }, { root: el, threshold: [0.6, 0.8, 1] });
     el.querySelectorAll('[data-card]').forEach(c => io.observe(c));
     return () => io.disconnect();
   }, [data]);
 
-  function scrollByCards(dir=1) {
+  function scrollByCards(dir = 1) {
     const el = wrapRef.current; if (!el) return;
-    const card = el.querySelector('[data-card]'); const gap=16;
+    const card = el.querySelector('[data-card]'); const gap = 16;
     const w = card ? card.getBoundingClientRect().width : 340;
-    el.scrollBy({ left: dir*(w+gap), behavior: 'smooth' });
+    el.scrollBy({ left: dir * (w + gap), behavior: 'smooth' });
   }
 
   return (
-    <section className="relative rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
+    <section className="relative rounded-3xl border border-black/5 bg-white p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
@@ -48,36 +49,39 @@ export default function GoldNewsGlassCarousel({ items }) {
 
       <div className="relative">
         {/* Flechas */}
-        <button aria-label="Anterior" onClick={()=>scrollByCards(-1)}
-          className="hidden sm:flex absolute left-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 shadow hover:bg-white">
+        <button
+          aria-label="Anterior"
+          onClick={() => scrollByCards(-1)}
+          className="hidden sm:flex absolute left-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 ring-1 ring-black/5 shadow hover:bg-white"
+        >
           <ChevronLeft className="w-5 h-5" />
         </button>
-        <button aria-label="Siguiente" onClick={()=>scrollByCards(1)}
-          className="hidden sm:flex absolute right-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 shadow hover:bg-white">
+        <button
+          aria-label="Siguiente"
+          onClick={() => scrollByCards(1)}
+          className="hidden sm:flex absolute right-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 ring-1 ring-black/5 shadow hover:bg-white"
+        >
           <ChevronRight className="w-5 h-5" />
         </button>
 
-        {/* Fades lados */}
+        {/* Fades laterales muy suaves */}
         <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-white to-transparent" />
         <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-white to-transparent" />
 
+        {/* Contenedor: sin sombra global */}
         <div ref={wrapRef} className="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 px-16">
           {data.map((it, idx) => (
-            <article key={idx} data-card data-idx={idx}
-              className="group min-w-[320px] max-w-[360px] snap-center">
-              {/* Imagen flotante */}
+            <article key={idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
+              {/* Imagen flotante con loader + fallbacks */}
               <div className="relative px-2">
                 <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg" />
-                <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-lg group-hover:shadow-2xl transition-transform duration-500 group-hover:-translate-y-0.5">
-                  <div className="aspect-[16/9] w-full bg-gray-100">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={it.image} alt="" className="h-full w-full object-cover" />
-                  </div>
+                <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_12px_28px_rgba(0,0,0,0.10)] transition-shadow duration-300">
+                  <Thumb src={it.image} alt={it.title} idx={idx} />
                 </div>
               </div>
 
-              {/* Tarjeta glass */}
-              <div className="relative -mt-6 rounded-3xl border border-white/30 bg-white/10 backdrop-blur-md shadow-[0_10px_30px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.6)] px-4 pt-4 pb-5">
+              {/* Tarjeta glass sutil */}
+              <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/40 backdrop-blur-md shadow-[0_8px_20px_rgba(0,0,0,0.08)] px-4 pt-4 pb-5">
                 <header className="flex items-center justify-between text-[11px] text-gray-500 mb-1">
                   <div className="flex items-center gap-1">
                     <span className="font-medium text-indigo-600">{it.source}</span>
@@ -102,7 +106,7 @@ export default function GoldNewsGlassCarousel({ items }) {
                 {/* Barras de relevancia/confianza */}
                 <div className="grid grid-cols-2 gap-3">
                   <Meter label="Relevancia" value={it.relevance} />
-                  <Meter label="Confianza"  value={it.confidence} />
+                  <Meter label="Confianza" value={it.confidence} />
                 </div>
               </div>
             </article>
@@ -117,6 +121,40 @@ export default function GoldNewsGlassCarousel({ items }) {
         ))}
       </div>
     </section>
+  );
+}
+
+/* =================== Thumbnail robusto =================== */
+function Thumb({ src, alt, idx = 0 }) {
+  const [okSrc, setOkSrc] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    const candidate = src || '';
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => { if (alive) { setOkSrc(candidate); setLoading(false); } };
+    img.onerror = () => { if (alive) { setOkSrc(FALLBACKS[idx % FALLBACKS.length]); setLoading(false); } };
+    // si src vacío, fuerza fallback inmediato
+    if (candidate) img.src = candidate; else { setOkSrc(FALLBACKS[idx % FALLBACKS.length]); setLoading(false); }
+    return () => { alive = false; };
+  }, [src, idx]);
+
+  return (
+    <div className="aspect-[16/9] w-full bg-gray-100 relative">
+      {loading && <div className="absolute inset-0 animate-pulse bg-gray-200" />}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={okSrc || FALLBACKS[idx % FALLBACKS.length]}
+        alt={alt || 'thumbnail'}
+        className="h-full w-full object-cover"
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onLoad={() => setLoading(false)}
+        onError={() => { setOkSrc(FALLBACKS[(idx + 1) % FALLBACKS.length]); setLoading(false); }}
+      />
+    </div>
   );
 }
 
@@ -148,6 +186,15 @@ function labelSent(s){ const v=(s||'').toLowerCase(); if(['alcista','bullish'].i
 function toneBySent(s){ const v=(s||'').toLowerCase(); if(['alcista','bullish'].includes(v)) return 'success'; if(['bajista','bearish'].includes(v)) return 'danger'; return 'secondary'; }
 function labelImpact(s){ const v=(s||'').toLowerCase(); if(v==='alto'||v==='high') return 'Alto'; if(v==='medio'||v==='medium') return 'Medio'; return 'Bajo'; }
 function toneByImpact(s){ const v=(s||'').toLowerCase(); if(v==='alto'||v==='high') return 'warning'; if(v==='medio'||v==='medium') return 'accent'; return 'secondary'; }
+
+/* =================== Fallbacks HD =================== */
+const FALLBACKS = [
+  'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1610375382125-1e131b6f2d87?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1603569283848-c6b0b4b2a941?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1607603750909-408e19386858?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?q=80&w=1600&auto=format&fit=crop'
+];
 
 /* =================== Datos falsos (demo) =================== */
 const FAKE_NEWS = [

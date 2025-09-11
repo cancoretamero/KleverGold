@@ -1,12 +1,12 @@
 // src/api.js
 import { CONFIG } from './config.js';
 
-// --------- Parse helpers ----------
+// ---------- helpers comunes ----------
 function toDate(d){ try { return (d instanceof Date) ? d : new Date(d); } catch { return new Date(); } }
 function num(x){ const n = Number(x); return Number.isFinite(n) ? n : NaN; }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-// --------- Metals API: día a día ----------
+// ---------- OHLC día a día (ya lo usabas) ----------
 export async function fetchOhlcDayFromMetals(dateISO) {
   if (!CONFIG.API_KEY) throw new Error("Falta API key (define NEXT_PUBLIC_METALS_API_KEY / VITE_METALS_API_KEY o window.METALS_API_KEY)");
   const url = new URL(`${CONFIG.API_BASE}/ohlc`);
@@ -20,40 +20,26 @@ export async function fetchOhlcDayFromMetals(dateISO) {
   if (json?.error) throw new Error(json.error?.message || "API error");
 
   const payload = json.ohlc || json.data || json;
-  const open = num(payload.open);
-  const high = num(payload.high);
-  const low = num(payload.low);
-  const close = num(payload.close);
-  if (![open, high, low, close].every(Number.isFinite)) {
-    throw new Error("Respuesta API sin OHLC válido");
-  }
+  const open = num(payload.open), high = num(payload.high), low = num(payload.low), close = num(payload.close);
+  if (![open, high, low, close].every(Number.isFinite)) throw new Error("Respuesta API sin OHLC válido");
+
   const dt = toDate(dateISO);
-  return {
-    date: dt, open, high, low, close,
-    year: dt.getUTCFullYear(),
-    month: dt.getUTCMonth() + 1,
-    range: high - low
-  };
+  return { date: dt, open, high, low, close, year: dt.getUTCFullYear(), month: dt.getUTCMonth()+1, range: high - low };
 }
 
 export async function fetchMissingDaysSequential(daysISO) {
   const out = [];
   for (let i = 0; i < daysISO.length; i++) {
     const d = daysISO[i];
-    try {
-      const row = await fetchOhlcDayFromMetals(d);
-      out.push(row);
-    } catch (e) {
-      console.warn("Fallo obteniendo", d, e);
-    }
-    if (i < daysISO.length - 1 && CONFIG.REQUEST_DELAY_MS > 0) {
-      await sleep(CONFIG.REQUEST_DELAY_MS || 1100);
+    try { out.push(await fetchOhlcDayFromMetals(d)); } catch (e) { console.warn("Fallo obteniendo", d, e); }
+    if (i < daysISO.length - 1 && (CONFIG.REQUEST_DELAY_MS ?? 1100) > 0) {
+      await sleep(CONFIG.REQUEST_DELAY_MS ?? 1100);
     }
   }
   return out;
 }
 
-// --------- Netlify Function: persistir al repo (CSV) ----------
+// ---------- Persistencia en repo (Netlify Function) ----------
 export async function persistRowsToRepo(rowsNew) {
   try {
     const resp = await fetch('/.netlify/functions/update-csv', {
@@ -71,15 +57,14 @@ export async function persistRowsToRepo(rowsNew) {
   }
 }
 
-// --------- Optimización de huecos: intenta timeseries y agrupa ---------
+// ---------- Optimización huecos (ranges + timeseries si existe) ----------
 export async function fetchMissingDaysOptimized(daysISO) {
   try {
-    const ranges = toRanges(daysISO); // agrupa contiguos
+    const ranges = toRanges(daysISO);
     const out = [];
     for (const [start, end] of ranges) {
-      const tsRows = await tryTimeseries(start, end); // 1 llamada por rango si existe endpoint
+      const tsRows = await tryTimeseries(start, end);
       if (tsRows?.length) { out.push(...tsRows); continue; }
-      // fallback secuencial (respeta throttle)
       const eachRows = await fetchMissingDaysSequential(enumerate(start, end));
       out.push(...eachRows);
     }
@@ -106,28 +91,52 @@ function enumerate(a,b){ const out=[]; let d=new Date(a); const end=new Date(b);
 
 async function tryTimeseries(startISO, endISO){
   try {
-    // Ajusta si tu Metals API usa otra ruta/shape para timeseries
     const url = new URL(`${CONFIG.API_BASE}/timeseries`);
     url.searchParams.set('access_key', CONFIG.API_KEY);
     url.searchParams.set('symbol', CONFIG.SYMBOL || 'XAUUSD');
     url.searchParams.set('start_date', startISO);
     url.searchParams.set('end_date', endISO);
-
     const r = await fetch(url.toString());
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-
-    const rows = [];
     const data = j?.ohlc || j?.rates || j?.data || j;
+    const rows = [];
     for (const [date, v] of Object.entries(data)) {
-      const open  = num(v.open), high=num(v.high), low=num(v.low), close=num(v.close);
+      const open=num(v.open), high=num(v.high), low=num(v.low), close=num(v.close);
       if ([open,high,low,close].every(Number.isFinite)) {
         const dt = new Date(date+'T00:00:00Z');
         rows.push({ date: dt, open, high, low, close, year: dt.getUTCFullYear(), month: dt.getUTCMonth()+1, range: high-low });
       }
     }
     return rows.sort((a,b)=> +a.date - +b.date);
-  } catch {
-    return null; // sin timeseries o error → que use secuencial
+  } catch { return null; }
+}
+
+// ---------- NUEVO: precio spot (/latest) para el encabezado ----------
+export async function fetchSpotLatest() {
+  if (!CONFIG.API_KEY) throw new Error("Falta API key para /latest");
+  const url = new URL(`${CONFIG.API_BASE}/latest`);
+  url.searchParams.set('access_key', CONFIG.API_KEY);
+  // Algunas APIs usan 'symbols', otras 'symbol'. Probamos ambos.
+  url.searchParams.set('symbols', CONFIG.SYMBOL || 'XAUUSD');
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+
+  // Estructuras posibles: { rates: {XAUUSD: 2365.1}, timestamp }
+  // o { rate: 2365.1, symbol: "XAUUSD", date: "..." }
+  let price = null, ts = Date.now();
+  if (j?.rates && typeof j.rates === 'object') {
+    const key = Object.keys(j.rates)[0];
+    price = num(j.rates[key]);
+  } else if (num(j?.rate)) {
+    price = num(j.rate);
+  } else if (num(j?.price)) {
+    price = num(j.price);
   }
+  if (j?.timestamp) ts = j.timestamp*1000;
+  else if (j?.date) { const d = Date.parse(j.date); if (!Number.isNaN(d)) ts = d; }
+
+  if (!Number.isFinite(price)) throw new Error('Spot sin precio válido');
+  return { price, ts };
 }

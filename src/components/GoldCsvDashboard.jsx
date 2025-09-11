@@ -1,4 +1,4 @@
- import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Brush, ReferenceLine } from 'recharts'
 import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload } from "lucide-react"
 import CandleChart from './CandleChart.jsx'
@@ -7,7 +7,7 @@ import TopTable from './TopTable.jsx'
 import CsvLoader from './CsvLoader.jsx'
 import { CONFIG } from '../config.js'
 import { aggregateOhlc, enumerateDays, quantile, loadCsvFromUrl } from '../utils.js'
-import { fetchMissingDaysSequential } from '../api.js'
+import { fetchMissingDaysSequential, fetchMissingDaysOptimized, persistRowsToRepo } from '../api.js'
 import { loadExtraFromLS, saveExtraToLS, mapByDate, rowsFromMap } from '../storage.js'
 
 // NUEVOS imports
@@ -164,7 +164,7 @@ export default function GoldCsvDashboard() {
       const sum = yrRows.reduce((s, r) => s + r.range, 0);
       let maxRow = yrRows[0];
       for (const r of yrRows) if (r.range > maxRow.range) maxRow = r;
-      const monthMap = new Map(); // month -> number[]
+      const monthMap = new Map();
       for (const r of yrRows) {
         const k = r.month;
         if (!monthMap.has(k)) monthMap.set(k, []);
@@ -214,13 +214,15 @@ export default function GoldCsvDashboard() {
     if (!gaps.length) return;
     setFilling(true);
     try {
-      const rowsNew = await fetchMissingDaysSequential(gaps);
+      // optimizado + persistencia en repo
+      const rowsNew = await fetchMissingDaysOptimized(gaps);
       if (!rowsNew.length) return;
       const m = mapByDate(extraRows);
       for (const r of rowsNew) m.set(r.date.toISOString().slice(0, 10), r);
       const merged = rowsFromMap(m);
       setExtraRows(merged);
       saveExtraToLS(merged);
+      persistRowsToRepo(rowsNew).catch(()=>{});
     } finally {
       setFilling(false);
     }
@@ -260,7 +262,7 @@ export default function GoldCsvDashboard() {
       {/* === NUEVA SECCIÓN: “Últimos datos del oro” (debajo del CSV) === */}
       <GoldNowSection
         rows={rows}
-        fetchMissingDaysSequential={fetchMissingDaysSequential}
+        fetchMissingDaysSequential={fetchMissingDaysOptimized}
         onAppendRows={(rowsNew) => {
           if (!rowsNew?.length) return;
           const m = mapByDate(extraRows);
@@ -268,6 +270,7 @@ export default function GoldCsvDashboard() {
           const merged = rowsFromMap(m);
           setExtraRows(merged);
           saveExtraToLS(merged);
+          persistRowsToRepo(rowsNew).catch(()=>{});
         }}
       />
 
@@ -410,7 +413,7 @@ export default function GoldCsvDashboard() {
             </div>
           </div>
 
-          {/* Velas: versión moderna si engine=auto|lwc; si no, fallback a CandleChart */}
+          {/* Velas: moderna si engine=auto|lwc; si no, fallback a CandleChart */}
           <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
             <h3 className="font-semibold mb-2">Velas</h3>
             {(engine === 'lwc' || engine === 'auto')

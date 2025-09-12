@@ -10,8 +10,9 @@ from ..service.statsforecast_model import train_and_forecast_stats
 from ..service.conformal import ConformalCalibrator
 from ..service.regime import hmm_regime
 from ..service.risk import risk_garch_var_es
+from ..service.policy import compute_signal, SignalConfig
 
-app = FastAPI(title="KleverGold EPITOME API", version="0.2.0")
+app = FastAPI(title="KleverGold EPITOME API", version="0.3.0")
 
 # CORS (configurable por EPITOME_ALLOWED_ORIGINS="*")
 app.add_middleware(
@@ -62,10 +63,34 @@ class RiskRes(BaseModel):
     alpha: float
 
 
+class SignalsReq(BaseModel):
+    timestamps: List[str]
+    price: List[float]
+    horizon: int = Field(default=24, ge=1, le=500)
+    alpha: float = Field(default=0.05, gt=0, lt=0.5)
+
+
+class SignalsRes(BaseModel):
+    action: str
+    horizon: int
+    price0: float
+    target: float
+    stop: float
+    takeprofit: float
+    confidence: float
+    position_size: float
+    regime: str
+    p_bull: float
+    p_bear: float
+    p_chop: float
+    metrics: Dict[str, float]
+    quantiles: Dict[str, List[float]]
+
+
 # ========= Endpoints =========
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.2.0"}
+    return {"ok": True, "version": "0.3.0"}
 
 
 @app.post("/forecast", response_model=ForecastRes)
@@ -90,18 +115,12 @@ def forecast(req: ForecastReq):
 
         # Régimen con HMM sobre retornos históricos
         rets = np.diff(np.log(prices))
-        regime, p_bull, p_bear, p_chop = hmm_regime(rets)
+        regime, _, _, _ = hmm_regime(rets)
 
         return ForecastRes(
-            quantiles={
-                "q05": q05.tolist(),
-                "q10": q10.tolist(),
-                "q50": q50.tolist(),
-                "q90": q90.tolist(),
-                "q95": q95.tolist(),
-            },
+            quantiles={"q05": q05.tolist(), "q10": q10.tolist(), "q50": q50.tolist(), "q90": q90.tolist(), "q95": q95.tolist()},
             regime=regime,
-            coverage_target=0.90,  # objetivo típico; ajustable
+            coverage_target=0.90,
         )
     except HTTPException:
         raise
@@ -135,3 +154,17 @@ def risk(req: RiskReq):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"risk_error: {e}")
+
+
+@app.post("/signals", response_model=SignalsRes)
+def signals(req: SignalsReq):
+    prices = np.array(req.price, dtype=float)
+    if prices.size < 120:
+        raise HTTPException(status_code=400, detail="Se requieren al menos 120 precios.")
+    try:
+        out = compute_signal(prices, req.timestamps, cfg=SignalConfig(alpha=req.alpha, horizon=req.horizon))
+        return SignalsRes(**out)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"signals_error: {e}")

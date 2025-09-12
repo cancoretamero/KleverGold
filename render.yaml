@@ -1,4 +1,3 @@
-# render.yaml — Despliegue automático del backend EPITOME (FastAPI) en Render
 services:
   - type: web
     name: klevergold-epitome
@@ -13,3 +12,5 @@ services:
         value: "*"
       - key: EPITOME_COVERAGE_TARGET
         value: "0.90"
+      - key: EPITOME_LOG_LEVEL
+        value: "INFO"

@@ -2,15 +2,11 @@ services:
   - type: web
     name: klevergold-epitome
     env: python
-    rootDirectory: epitome-backend
-    buildCommand: pip install -U pip && pip install -e .
-    startCommand: uvicorn epitome.api.main:app --host 0.0.0.0 --port $PORT
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     autoDeploy: true
-    plan: free
     envVars:
-      - key: EPITOME_ALLOWED_ORIGINS
+      - key: CORS_ALLOW_ORIGINS
         value: "*"
-      - key: EPITOME_COVERAGE_TARGET
-        value: "0.90"
-      - key: EPITOME_LOG_LEVEL
-        value: "INFO"

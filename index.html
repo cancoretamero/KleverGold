@@ -2,14 +2,16 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Gold CSV Dashboard</title>
-    <!-- Carga estática desde /public/config.js -->
-    <script src="/config.js" defer></script>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1"
+    />
+    <title>KleverGold</title>
+    <!-- IMPORTANTE: ruta relativa -->
+    <script src="./config.js"></script>
   </head>
-  <body>
+  <body class="bg-zinc-50 text-zinc-900">
     <div id="root"></div>
-    <!-- Mantén la línea de Vite tal como está -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

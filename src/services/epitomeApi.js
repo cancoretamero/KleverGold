@@ -83,7 +83,7 @@ export async function regimeFromCsv({ csvUrl = CONFIG.CSV_URL } = {}) {
   })
 }
 
-// Señales (si tu backend aún no tiene /signals, el panel mostrará su CardError)
+// Señales (aparecerá el panel cuando implementemos /signals en el backend)
 export async function signalsFromCsv({ csvUrl = CONFIG.CSV_URL, horizon = 24, alpha = 0.05 } = {}) {
   const hist = await getHistoryFromCsv(csvUrl)
   return postJSON('/signals', {
@@ -116,7 +116,7 @@ export async function backtestFromCsv({
 }
 
 /* =========================
-   APIs directas (las dejamos por compatibilidad)
+   APIs directas (compatibilidad)
    ========================= */
 export async function apiForecast(series, horizon = 24, coverage = 0.9) {
   return postJSON('/forecast', { series, horizon, coverage, freq: 'D' })

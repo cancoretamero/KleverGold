@@ -1,6 +1,5 @@
 // src/components/EpitomeSignalsPanel.jsx
-// Señales EPITOME (risk-aware): consume /signals (action, SL/TP, confianza...)
-// Muestra una tarjeta compacta con estado y detalles.
+// Señales EPITOME (risk-aware): consume /signals (acción, SL/TP, confianza).
 
 import React, { useEffect, useState } from "react";
 import { CONFIG } from "../config.js";

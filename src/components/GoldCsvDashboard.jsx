@@ -23,6 +23,9 @@ import kleverLogo from '../assets/klevergold.png'
 // NUEVO: carrusel de noticias (demo estética, datos falsos)
 import GoldNewsGlassCarousel from './GoldNewsGlassCarousel.jsx'
 
+// === EPITOME: Panel de pronóstico probabilístico ===
+import EpitomeForecastPanel from './EpitomeForecastPanel.jsx'
+
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
   const [extraRows, setExtraRows] = useState(loadExtraFromLS()); // días añadidos vía API
@@ -439,6 +442,11 @@ export default function GoldCsvDashboard() {
               : <CandleChart data={candleRows} height={420} engine={engine} mode={mode} fitNonce={fitNonce} />
             }
           </section>
+
+          {/* === EPITOME: Pronóstico probabilístico (panel autónomo) === */}
+          {CONFIG.EPITOME_ON && (
+            <EpitomeForecastPanel />
+          )}
 
           {/* Variación diaria (card v6 + glass tooltip) */}
           <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">

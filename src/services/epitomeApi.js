@@ -17,7 +17,7 @@ function parseCsv(text) {
 
   const header = lines[0].split(",").map((h) => h.trim());
   const rows = lines.slice(1).map((line) => {
-    const cols = line.split(","); // sencillo; asume que no hay comas en campos
+    const cols = line.split(",");
     const obj = {};
     header.forEach((h, i) => (obj[h] = (cols[i] ?? "").trim()));
     return obj;
@@ -62,7 +62,6 @@ export async function getHistoryFromCsv(csvUrl = CONFIG.CSV_URL) {
     throw new Error("No encuentro columnas de tiempo/cierre en el CSV");
   }
 
-  // Normalizamos y ordenamos por tiempo ascendente
   const parsed = rows
     .map((r) => {
       const ts = toIsoUTC(r[timeCol]);
@@ -75,10 +74,7 @@ export async function getHistoryFromCsv(csvUrl = CONFIG.CSV_URL) {
   const timestamps = parsed.map((r) => r.ts);
   const price = parsed.map((r) => r.px);
 
-  if (price.length < 60) {
-    throw new Error("Se necesitan al menos 60 filas en el CSV");
-  }
-
+  if (price.length < 60) throw new Error("Se necesitan al menos 60 filas en el CSV");
   return { timestamps, price };
 }
 
@@ -105,7 +101,7 @@ export async function requestRisk({ timestamps, price, alpha = 0.05, apiBase = C
     body: JSON.stringify({ timestamps, price, alpha }),
   });
   if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/risk ${r.status}: ${t||r.statusText}`); }
-  return await r.json(); // { sigma, mu, var, es, alpha }
+  return await r.json();
 }
 export async function riskFromCsv({ csvUrl = CONFIG.CSV_URL, alpha = 0.05 } = {}) {
   const { timestamps, price } = await getHistoryFromCsv(csvUrl);
@@ -120,7 +116,7 @@ export async function requestRegime({ timestamps, price, apiBase = CONFIG.EPITOM
     body: JSON.stringify({ timestamps, price }),
   });
   if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/regime ${r.status}: ${t||r.statusText}`); }
-  return await r.json(); // { regime, p_bull, p_bear, p_chop }
+  return await r.json();
 }
 export async function regimeFromCsv({ csvUrl = CONFIG.CSV_URL } = {}) {
   const { timestamps, price } = await getHistoryFromCsv(csvUrl);
@@ -140,4 +136,30 @@ export async function requestSignals({ timestamps, price, horizon = 24, alpha = 
 export async function signalsFromCsv({ csvUrl = CONFIG.CSV_URL, horizon = 24, alpha = 0.05 } = {}) {
   const { timestamps, price } = await getHistoryFromCsv(csvUrl);
   return await requestSignals({ timestamps, price, horizon, alpha });
+}
+
+/* ===== BACKTEST ===== */
+export async function requestBacktest({
+  timestamps, price,
+  horizon = 24, alpha = 0.05,
+  stride = 5, lookback_min = 300,
+  fees = 0.0002, slippage = 0.0001,
+  apiBase = CONFIG.EPITOME_API,
+}) {
+  const url = `${apiBase.replace(/\/+$/, "")}/backtest`;
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamps, price, horizon, alpha, stride, lookback_min, fees, slippage }),
+  });
+  if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/backtest ${r.status}: ${t||r.statusText}`); }
+  return await r.json(); // { metrics, counts, equity_curve }
+}
+export async function backtestFromCsv({
+  csvUrl = CONFIG.CSV_URL,
+  horizon = 24, alpha = 0.05,
+  stride = 5, lookback_min = 300,
+  fees = 0.0002, slippage = 0.0001,
+} = {}) {
+  const { timestamps, price } = await getHistoryFromCsv(csvUrl);
+  return await requestBacktest({ timestamps, price, horizon, alpha, stride, lookback_min, fees, slippage });
 }

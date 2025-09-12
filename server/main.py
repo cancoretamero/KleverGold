@@ -1,4 +1,4 @@
-# server/main.py — Epitome v1 (compatible con el frontend de KleverGold)
+# server/main.py — Epitome v1.2 (Forecast + Regime + Risk + Signals)
 import os, math
 from datetime import datetime
 from typing import Any, Dict, List
@@ -8,7 +8,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-# Modelos clásicos
+# Modelos
 import pmdarima as pm
 from statsmodels.tsa.exponential_smoothing.ets import ETSModel
 from hmmlearn.hmm import GaussianHMM
@@ -23,7 +23,7 @@ from prometheus_client import Counter, Histogram, CollectorRegistry, generate_la
 ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 ORIGINS = [o.strip() for o in ALLOW_ORIGINS.split(",")] if ALLOW_ORIGINS else ["*"]
 
-app = FastAPI(title="KleverGold Epitome v1", version="1.1.0")
+app = FastAPI(title="KleverGold Epitome v1.2", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -129,13 +129,11 @@ def regime_core(y: pd.Series) -> Dict[str, Any]:
     y = y.dropna()
     if len(y) < 200:  # robustez
         return {"regime": "chop", "p_bull": 0.33, "p_bear": 0.33, "p_chop": 0.34}
-
     rets = np.log(y / y.shift(1)).dropna().values.reshape(-1, 1)
     hmm = GaussianHMM(n_components=3, covariance_type="full", n_iter=200, random_state=42)
     hmm.fit(rets)
     _, post = hmm.score_samples(rets)
     last = post[-1]
-
     means = hmm.means_.flatten(); order = np.argsort(means)
     mapping = {order[0]: "bear", order[1]: "chop", order[2]: "bull"}
     p = {mapping[i]: float(last[i]) for i in range(3)}
@@ -147,13 +145,9 @@ def regime_core(y: pd.Series) -> Dict[str, Any]:
 # -----------------------------
 def risk_core(y: pd.Series, alpha: float = 0.05) -> Dict[str, Any]:
     y = y.dropna()
-    rets = np.log(y / y.shift(1)).dropna()  # rendimientos log diarios
-
-    # Métricas históricas
+    rets = np.log(y / y.shift(1)).dropna()
     if len(rets) < 60:
         raise RuntimeError("Serie demasiado corta para riesgo")
-
-    # GARCH(1,1) con escala en % para estabilidad numérica
     warnings = []
     try:
         am = arch_model(rets * 100, p=1, q=1, mean="constant", vol="Garch", dist="t")
@@ -164,14 +158,78 @@ def risk_core(y: pd.Series, alpha: float = 0.05) -> Dict[str, Any]:
         mu = float(res.params.get("mu", rets.mean() * 100)) / 100.0
     except Exception:
         warnings.append("GARCH fallback to historical moments")
-        sigma = float(np.std(rets))                         # fracción diaria
+        sigma = float(np.std(rets))
         mu = float(np.mean(rets))
-
     q = float(np.percentile(rets, alpha*100.0))            # VaR (cuantil de pérdidas)
     es_mask = rets <= q
     es = float(rets[es_mask].mean()) if es_mask.any() else q
-
     return {"sigma": sigma, "mu": mu, "var": q, "es": es, "alpha": alpha, "warnings": warnings}
+
+# -----------------------------
+# Núcleo: Señales (risk-aware)
+# -----------------------------
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-x))
+
+def signals_core(y: pd.Series, h: int = 24, coverage: float = 0.9) -> Dict[str, Any]:
+    last_price = float(y.iloc[-1])
+    fq = forecast_core(y, h, coverage)
+    reg = regime_core(y)
+
+    q10, q50, q90 = np.array(fq["q10"]), np.array(fq["q50"]), np.array(fq["q90"])
+    # ancho probabilístico (log-cuantiIes): estabilidad frente a escala
+    width = np.maximum(1e-12, np.abs(np.log(q90 / q10)))
+    width_th = float(np.median(width)) * 0.5  # umbral de ruido (la mitad de la mediana)
+
+    signals = []
+    for i in range(h):
+        exp_ret = float(np.log(q50[i] / last_price))     # retorno esperado (log)
+        w = float(width[i])
+
+        # decisión bruta
+        if w < width_th or abs(exp_ret) < 0.0005:        # ~0.05% filtro mínimo
+            action = "FLAT"
+        elif exp_ret > 0:
+            action = "LONG"
+        else:
+            action = "SHORT"
+
+        # confianza: razón señal/ruido modulada por régimen
+        if action == "LONG":
+            gate = reg["p_bull"]
+            sl, tp = float(q10[i]), float(q90[i])
+        elif action == "SHORT":
+            gate = reg["p_bear"]
+            sl, tp = float(q90[i]), float(q10[i])
+        else:
+            gate = reg["p_chop"]
+            sl, tp = float(q10[i]), float(q90[i])
+
+        score = (abs(exp_ret) / w) * max(1e-6, gate) * 3.0
+        confidence = max(0.0, min(1.0, _sigmoid(score) * 0.999))
+
+        signals.append({
+            "h": int(i + 1),
+            "action": action,
+            "confidence": float(confidence),
+            "entry": last_price,
+            "sl": float(sl),
+            "tp": float(tp),
+            "q10": float(q10[i]),
+            "q50": float(q50[i]),
+            "q90": float(q90[i])
+        })
+
+    return {
+        "generated_at": now_utc_iso(),
+        "last_price": last_price,
+        "regime": reg["regime"],
+        "p_bull": reg["p_bull"], "p_bear": reg["p_bear"], "p_chop": reg["p_chop"],
+        "horizon": int(h),
+        # entregamos ambos nombres por compatibilidad con UIs distintas
+        "signals": signals,
+        "rows": signals
+    }
 
 # -----------------------------
 # Endpoints
@@ -222,6 +280,20 @@ async def risk_ep(request: Request):
             alpha = float(payload.get("alpha", 0.05))
             out = risk_core(y, alpha)
             return {"generated_at": now_utc_iso(), **out}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/signals")
+async def signals_ep(request: Request):
+    with REQ_DURATION.labels(endpoint="/signals", method="POST").time():
+        REQ_COUNTER.labels(endpoint="/signals", method="POST").inc()
+        try:
+            payload = await request.json()
+            y = _payload_to_series(payload)
+            horizon = int(payload.get("horizon", 24))
+            coverage = float(payload.get("coverage", 0.9))
+            out = signals_core(y, horizon, coverage)
+            return out
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 

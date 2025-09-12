@@ -19,12 +19,13 @@ from ..service.conformal import ConformalCalibrator
 from ..service.regime import hmm_regime
 from ..service.risk import risk_garch_var_es
 from ..service.policy import compute_signal, SignalConfig
+from ..service.backtest import backtest_signal, BacktestConfig
 
 logger = setup_logging()
 
-app = FastAPI(title="KleverGold EPITOME API", version="0.4.0")
+app = FastAPI(title="KleverGold EPITOME API", version="0.5.0")
 
-# CORS (configurable por EPITOME_ALLOWED_ORIGINS="*")
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
@@ -37,6 +38,7 @@ app.add_middleware(
 @app.middleware("http")
 async def prometheus_middleware(request: Request, call_next):
     start = time.perf_counter()
+    status = 200
     try:
         response = await call_next(request)
         status = response.status_code
@@ -55,7 +57,7 @@ class ForecastReq(BaseModel):
     horizon: int = Field(default=24, ge=1, le=500)
 
 class ForecastRes(BaseModel):
-    quantiles: Dict[str, List[float]]  # q05,q10,q50,q90,q95
+    quantiles: Dict[str, List[float]]
     regime: str
     coverage_target: float
 
@@ -75,10 +77,10 @@ class RiskReq(BaseModel):
     alpha: float = Field(default=0.05, gt=0, lt=0.5)
 
 class RiskRes(BaseModel):
-    sigma: float  # vol condicional 1-step (decimales)
-    mu: float     # media condicional 1-step (decimales)
-    var: float    # VaR (decimales) cola izquierda
-    es: float     # ES (decimales) cola izquierda
+    sigma: float
+    mu: float
+    var: float
+    es: float
     alpha: float
 
 class SignalsReq(BaseModel):
@@ -103,14 +105,28 @@ class SignalsRes(BaseModel):
     metrics: Dict[str, float]
     quantiles: Dict[str, List[float]]
 
+class BacktestReq(BaseModel):
+    timestamps: List[str]
+    price: List[float]
+    horizon: int = Field(default=24, ge=1, le=500)
+    alpha: float = Field(default=0.05, gt=0, lt=0.5)
+    stride: int = Field(default=5, ge=1, le=50)
+    lookback_min: int = Field(default=300, ge=60, le=2000)
+    fees: float = Field(default=0.0002, ge=0.0, le=0.01)
+    slippage: float = Field(default=0.0001, ge=0.0, le=0.01)
+
+class BacktestRes(BaseModel):
+    metrics: Dict[str, float]
+    counts: Dict[str, int]
+    equity_curve: Dict[str, List]
+
 # ========= Endpoints =========
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.4.0"}
+    return {"ok": True, "version": "0.5.0"}
 
 @app.get("/metrics")
 def metrics():
-    # Exposición Prometheus
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.post("/forecast", response_model=ForecastRes)
@@ -121,27 +137,15 @@ def forecast(req: ForecastReq):
     t0 = time.perf_counter()
     try:
         base = train_and_forecast_stats(prices, req.timestamps, horizon=req.horizon, calib_len=None)
-
-        # Calibración conformal empírica multi-h
         calibr = ConformalCalibrator(alpha_low=0.05, alpha_high=0.95)
         q05, q10, q50, q90, q95 = calibr.apply(
-            q50=base["q50_base"],
-            q10=base["q10_base"],
-            q90=base["q90_base"],
-            q05=base["q05_base"],
-            q95=base["q95_base"],
-            residuals=base["residuals"],
+            q50=base["q50_base"], q10=base["q10_base"], q90=base["q90_base"],
+            q05=base["q05_base"], q95=base["q95_base"], residuals=base["residuals"]
         )
-
-        # Régimen con HMM sobre retornos históricos
         rets = np.diff(np.log(prices))
         regime, _, _, _ = hmm_regime(rets)
-
-        return ForecastRes(
-            quantiles={"q05": q05.tolist(), "q10": q10.tolist(), "q50": q50.tolist(), "q90": q90.tolist(), "q95": q95.tolist()},
-            regime=regime,
-            coverage_target=0.90,
-        )
+        return ForecastRes(quantiles={"q05": q05.tolist(),"q10": q10.tolist(),"q50": q50.tolist(),"q90": q90.tolist(),"q95": q95.tolist()},
+                           regime=regime, coverage_target=0.90)
     except HTTPException:
         raise
     except Exception as e:
@@ -187,11 +191,30 @@ def signals(req: SignalsReq):
         raise HTTPException(status_code=400, detail="Se requieren al menos 120 precios.")
     try:
         out = compute_signal(prices, req.timestamps, cfg=SignalConfig(alpha=req.alpha, horizon=req.horizon))
-        SIGNALS_CALLS.inc()
-        SIGNALS_ACTION.labels(out["action"]).inc()
+        SIGNALS_CALLS.inc(); SIGNALS_ACTION.labels(out["action"]).inc()
         return SignalsRes(**out)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"/signals error: {e}")
         raise HTTPException(status_code=500, detail=f"signals_error: {e}")
+
+@app.post("/backtest", response_model=BacktestRes)
+def backtest(req: BacktestReq):
+    prices = np.array(req.price, dtype=float)
+    if prices.size < max(120, req.lookback_min):
+        raise HTTPException(status_code=400, detail="Se requieren más precios para backtest.")
+    try:
+        out = backtest_signal(
+            prices, req.timestamps,
+            cfg=BacktestConfig(
+                horizon=req.horizon, alpha=req.alpha, stride=req.stride,
+                lookback_min=req.lookback_min, fees=req.fees, slippage=req.slippage
+            )
+        )
+        return BacktestRes(**out)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"/backtest error: {e}")
+        raise HTTPException(status_code=500, detail=f"backtest_error: {e}")

@@ -23,8 +23,10 @@ import kleverLogo from '../assets/klevergold.png'
 // NUEVO: carrusel de noticias (demo estética, datos falsos)
 import GoldNewsGlassCarousel from './GoldNewsGlassCarousel.jsx'
 
-// === EPITOME: Panel de pronóstico probabilístico ===
+// === EPITOME: Paneles ===
 import EpitomeForecastPanel from './EpitomeForecastPanel.jsx'
+import EpitomeRiskAndRegime from './EpitomeRiskAndRegime.jsx'
+import EpitomeSignalsPanel from './EpitomeSignalsPanel.jsx'
 
 export default function GoldCsvDashboard() {
   const [baseRows, setBaseRows] = useState([]); // CSV limpio
@@ -443,10 +445,14 @@ export default function GoldCsvDashboard() {
             }
           </section>
 
-          {/* === EPITOME: Pronóstico probabilístico (panel autónomo) === */}
-          {CONFIG.EPITOME_ON && (
-            <EpitomeForecastPanel />
-          )}
+          {/* === EPITOME: Pronóstico probabilístico === */}
+          {CONFIG.EPITOME_ON && <EpitomeForecastPanel />}
+
+          {/* === EPITOME: Riesgo & Régimen === */}
+          {CONFIG.EPITOME_ON && <EpitomeRiskAndRegime />}
+
+          {/* === EPITOME: Señal (acción, SL/TP, confianza) === */}
+          {CONFIG.EPITOME_ON && <EpitomeSignalsPanel />}
 
           {/* Variación diaria (card v6 + glass tooltip) */}
           <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">

@@ -5,6 +5,14 @@
 [build.environment]
   NODE_VERSION = "20"
 
+# PROXY a Render (debe ir ANTES del catch-all SPA)
+[[redirects]]
+  from = "/api/*"
+  to = "https://klevergold-epitome.onrender.com/:splat"
+  status = 200
+  force = true
+
+# SPA redirect
 [[redirects]]
   from = "/*"
   to = "/index.html"

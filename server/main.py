@@ -1,4 +1,4 @@
-# server/main.py — Epitome v1.2 (Forecast + Regime + Risk + Signals)
+# server/main.py — Epitome v1.2 (Forecast + Regime + Risk + Signals) con CORS robusto
 import os, math
 from datetime import datetime
 from typing import Any, Dict, List
@@ -8,32 +8,29 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-# Modelos
 import pmdarima as pm
 from statsmodels.tsa.exponential_smoothing.ets import ETSModel
 from hmmlearn.hmm import GaussianHMM
 from arch import arch_model
 
-# Métricas Prometheus
 from prometheus_client import Counter, Histogram, CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
 
-# -----------------------------
-# App & CORS
-# -----------------------------
+# ---------- App & CORS ----------
 ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 ORIGINS = [o.strip() for o in ALLOW_ORIGINS.split(",")] if ALLOW_ORIGINS else ["*"]
 
-app = FastAPI(title="KleverGold Epitome v1.2", version="1.2.0")
+app = FastAPI(title="KleverGold Epitome v1.2", version="1.2.1")
 
+# CORS seguro: sin credenciales, todos los métodos/headers y OPTIONS para preflight
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ORIGINS, allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"]
+    allow_origins=ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET","POST","OPTIONS"],
+    allow_headers=["*"],
 )
 
-# -----------------------------
-# Prometheus
-# -----------------------------
+# ---------- Prometheus ----------
 REGISTRY = CollectorRegistry(auto_describe=True)
 REQ_COUNTER = Counter("epitome_requests_total", "Total requests", ["endpoint", "method"], registry=REGISTRY)
 REQ_DURATION = Histogram("epitome_request_duration_seconds", "Request duration", ["endpoint", "method"], registry=REGISTRY)
@@ -41,59 +38,44 @@ REQ_DURATION = Histogram("epitome_request_duration_seconds", "Request duration",
 def now_utc_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
-# -----------------------------
-# Helpers de parsing
-# -----------------------------
+# ---------- Helpers ----------
 def _payload_to_series(payload: Dict[str, Any]) -> pd.Series:
-    """Convierte el payload del front a pd.Series de precios (índice datetime)."""
     if "series" in payload and isinstance(payload["series"], list):
         rows = payload["series"]
         ds = [pd.to_datetime(r.get("date")) for r in rows]
         y = [float(r.get("close")) for r in rows]
     elif "timestamps" in payload and "price" in payload:
-        ts = payload["timestamps"]; px = payload["price"]
-        if len(ts) != len(px):
-            raise ValueError("timestamps y price deben tener la misma longitud")
+        ts, px = payload["timestamps"], payload["price"]
+        if len(ts) != len(px): raise ValueError("timestamps y price deben tener la misma longitud")
         ds = [pd.to_datetime(t) for t in ts]
         y = [float(v) for v in px]
     else:
         raise ValueError("Formato inválido: usa 'series' o 'timestamps'+'price'")
-
-    df = pd.DataFrame({"ds": ds, "y": y}).dropna().sort_values("ds")
-    df = df.drop_duplicates(subset="ds", keep="last")
-    if len(df) < 60:
-        raise ValueError("Se requieren al menos 60 observaciones")
+    df = pd.DataFrame({"ds": ds, "y": y}).dropna().sort_values("ds").drop_duplicates(subset="ds", keep="last")
+    if len(df) < 60: raise ValueError("Se requieren al menos 60 observaciones")
     return pd.Series(df["y"].values, index=pd.DatetimeIndex(df["ds"].values), name="y")
 
 def _residual_quantiles(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     resid = y_true - y_pred
     if len(resid) < 20:
         s = float(np.nanstd(resid)) if len(resid) else 0.0
-        return {"q05": -1.645 * s, "q10": -1.282 * s, "q90": 1.282 * s, "q95": 1.645 * s}
+        return {"q05": -1.645*s, "q10": -1.282*s, "q90": 1.282*s, "q95": 1.645*s}
     return {
         "q05": float(np.nanpercentile(resid, 5)),
-        "q10": float(np.nanpercentile(resid, 10)),
-        "q90": float(np.nanpercentile(resid, 90)),
-        "q95": float(np.nanpercentile(resid, 95)),
+        "q10": float(np.nanpercentile(resid,10)),
+        "q90": float(np.nanpercentile(resid,90)),
+        "q95": float(np.nanpercentile(resid,95)),
     }
 
-# -----------------------------
-# Núcleo: Forecast (ARIMA + ETS)
-# -----------------------------
+# ---------- Forecast (ARIMA + ETS) ----------
 def forecast_core(y: pd.Series, h: int, coverage: float = 0.9) -> Dict[str, List[float]]:
-    # 1) ARIMA
     try:
-        arima = pm.auto_arima(
-            y.values, seasonal=False, stepwise=True, suppress_warnings=True,
-            error_action="ignore", max_order=10
-        )
+        arima = pm.auto_arima(y.values, seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore", max_order=10)
         arima_pred = arima.predict(h)
         ins = arima.predict_in_sample()
         arima_q = _residual_quantiles(y.values[-len(ins):], ins)
     except Exception:
         arima_pred = np.full(h, np.nan); arima_q = {"q05":0.0,"q10":0.0,"q90":0.0,"q95":0.0}
-
-    # 2) ETS (add-error, sin tendencia/estacionalidad)
     try:
         ets = ETSModel(y, error="add", trend=None, seasonal=None, initialization_method="estimated").fit(disp=False)
         ets_pred = ets.forecast(h)
@@ -102,138 +84,85 @@ def forecast_core(y: pd.Series, h: int, coverage: float = 0.9) -> Dict[str, List
         ets_q = _residual_quantiles(y.values[-m:], fitted.values[-m:])
     except Exception:
         ets_pred = np.full(h, np.nan); ets_q = {"q05":0.0,"q10":0.0,"q90":0.0,"q95":0.0}
-
     preds = np.vstack([p for p in [arima_pred, np.array(ets_pred)] if np.isfinite(p).all()])
-    if preds.size == 0:
-        raise RuntimeError("No fue posible ajustar ARIMA/ETS")
-
+    if preds.size == 0: raise RuntimeError("No fue posible ajustar ARIMA/ETS")
     q50 = np.nanmean(preds, axis=0)
-
     q05_err = np.nanmean([arima_q["q05"], ets_q["q05"]]); q10_err = np.nanmean([arima_q["q10"], ets_q["q10"]])
     q90_err = np.nanmean([arima_q["q90"], ets_q["q90"]]); q95_err = np.nanmean([arima_q["q95"], ets_q["q95"]])
-
     q05, q10, q90, q95 = [], [], [], []
     for i in range(h):
-        scale = math.sqrt(max(1, i + 1))
-        q05.append(float(q50[i] + q05_err * scale))
-        q10.append(float(q50[i] + q10_err * scale))
-        q90.append(float(q50[i] + q90_err * scale))
-        q95.append(float(q50[i] + q95_err * scale))
-
+        scale = math.sqrt(max(1, i+1))
+        q05.append(float(q50[i] + q05_err*scale))
+        q10.append(float(q50[i] + q10_err*scale))
+        q90.append(float(q50[i] + q90_err*scale))
+        q95.append(float(q50[i] + q95_err*scale))
     return {"q05": q05, "q10": q10, "q50": q50.tolist(), "q90": q90, "q95": q95, "coverage": coverage}
 
-# -----------------------------
-# Núcleo: Régimen (HMM 3 estados)
-# -----------------------------
+# ---------- Regime (HMM 3 estados) ----------
 def regime_core(y: pd.Series) -> Dict[str, Any]:
     y = y.dropna()
-    if len(y) < 200:  # robustez
-        return {"regime": "chop", "p_bull": 0.33, "p_bear": 0.33, "p_chop": 0.34}
-    rets = np.log(y / y.shift(1)).dropna().values.reshape(-1, 1)
+    if len(y) < 200: return {"regime":"chop","p_bull":0.33,"p_bear":0.33,"p_chop":0.34}
+    rets = np.log(y / y.shift(1)).dropna().values.reshape(-1,1)
     hmm = GaussianHMM(n_components=3, covariance_type="full", n_iter=200, random_state=42)
     hmm.fit(rets)
     _, post = hmm.score_samples(rets)
     last = post[-1]
     means = hmm.means_.flatten(); order = np.argsort(means)
-    mapping = {order[0]: "bear", order[1]: "chop", order[2]: "bull"}
+    mapping = {order[0]:"bear", order[1]:"chop", order[2]:"bull"}
     p = {mapping[i]: float(last[i]) for i in range(3)}
     regime = max(p.items(), key=lambda kv: kv[1])[0]
-    return {"regime": regime, "p_bull": p.get("bull",0.0), "p_bear": p.get("bear",0.0), "p_chop": p.get("chop",0.0)}
+    return {"regime":regime, "p_bull":p.get("bull",0.0), "p_bear":p.get("bear",0.0), "p_chop":p.get("chop",0.0)}
 
-# -----------------------------
-# Núcleo: Riesgo (sigma/μ, VaR, ES)
-# -----------------------------
+# ---------- Riesgo (σ, μ, VaR, ES) ----------
 def risk_core(y: pd.Series, alpha: float = 0.05) -> Dict[str, Any]:
     y = y.dropna()
     rets = np.log(y / y.shift(1)).dropna()
-    if len(rets) < 60:
-        raise RuntimeError("Serie demasiado corta para riesgo")
+    if len(rets) < 60: raise RuntimeError("Serie demasiado corta para riesgo")
     warnings = []
     try:
-        am = arch_model(rets * 100, p=1, q=1, mean="constant", vol="Garch", dist="t")
+        am = arch_model(rets*100, p=1, q=1, mean="constant", vol="Garch", dist="t")
         res = am.fit(disp="off")
         f = res.forecast(horizon=1)
-        var_next = float(f.variance.iloc[-1, 0])            # (%^2)
-        sigma = math.sqrt(var_next) / 100.0                 # → fracción diaria
-        mu = float(res.params.get("mu", rets.mean() * 100)) / 100.0
+        var_next = float(f.variance.iloc[-1,0])
+        sigma = math.sqrt(var_next)/100.0
+        mu = float(res.params.get("mu", rets.mean()*100))/100.0
     except Exception:
         warnings.append("GARCH fallback to historical moments")
-        sigma = float(np.std(rets))
-        mu = float(np.mean(rets))
-    q = float(np.percentile(rets, alpha*100.0))            # VaR (cuantil de pérdidas)
+        sigma = float(np.std(rets)); mu = float(np.mean(rets))
+    q = float(np.percentile(rets, alpha*100.0))
     es_mask = rets <= q
     es = float(rets[es_mask].mean()) if es_mask.any() else q
-    return {"sigma": sigma, "mu": mu, "var": q, "es": es, "alpha": alpha, "warnings": warnings}
+    return {"sigma":sigma, "mu":mu, "var":q, "es":es, "alpha":alpha, "warnings":warnings}
 
-# -----------------------------
-# Núcleo: Señales (risk-aware)
-# -----------------------------
-def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
-
-def signals_core(y: pd.Series, h: int = 24, coverage: float = 0.9) -> Dict[str, Any]:
+# ---------- Señales (risk-aware) ----------
+def _sigmoid(x: float) -> float: return 1.0/(1.0+math.exp(-x))
+def signals_core(y: pd.Series, h: int=24, coverage: float=0.9) -> Dict[str, Any]:
     last_price = float(y.iloc[-1])
     fq = forecast_core(y, h, coverage)
     reg = regime_core(y)
-
     q10, q50, q90 = np.array(fq["q10"]), np.array(fq["q50"]), np.array(fq["q90"])
-    # ancho probabilístico (log-cuantiIes): estabilidad frente a escala
-    width = np.maximum(1e-12, np.abs(np.log(q90 / q10)))
-    width_th = float(np.median(width)) * 0.5  # umbral de ruido (la mitad de la mediana)
-
+    width = np.maximum(1e-12, np.abs(np.log(q90/q10)))
+    width_th = float(np.median(width))*0.5
     signals = []
     for i in range(h):
-        exp_ret = float(np.log(q50[i] / last_price))     # retorno esperado (log)
+        exp_ret = float(np.log(q50[i]/last_price))
         w = float(width[i])
+        if w < width_th or abs(exp_ret) < 0.0005: action = "FLAT"
+        elif exp_ret > 0: action = "LONG"
+        else: action = "SHORT"
+        if action == "LONG": gate = reg["p_bull"]; sl, tp = float(q10[i]), float(q90[i])
+        elif action == "SHORT": gate = reg["p_bear"]; sl, tp = float(q90[i]), float(q10[i])
+        else: gate = reg["p_chop"]; sl, tp = float(q10[i]), float(q90[i])
+        score = (abs(exp_ret)/w) * max(1e-6, gate) * 3.0
+        confidence = max(0.0, min(1.0, _sigmoid(score)*0.999))
+        signals.append({"h":int(i+1), "action":action, "confidence":float(confidence),
+                        "entry":last_price, "sl":float(sl), "tp":float(tp),
+                        "q10":float(q10[i]), "q50":float(q50[i]), "q90":float(q90[i])})
+    return {"generated_at": now_utc_iso(), "last_price": last_price, "regime": reg["regime"],
+            "p_bull": reg["p_bull"], "p_bear": reg["p_bear"], "p_chop": reg["p_chop"],
+            "horizon": int(h), "signals": signals, "rows": signals}
 
-        # decisión bruta
-        if w < width_th or abs(exp_ret) < 0.0005:        # ~0.05% filtro mínimo
-            action = "FLAT"
-        elif exp_ret > 0:
-            action = "LONG"
-        else:
-            action = "SHORT"
-
-        # confianza: razón señal/ruido modulada por régimen
-        if action == "LONG":
-            gate = reg["p_bull"]
-            sl, tp = float(q10[i]), float(q90[i])
-        elif action == "SHORT":
-            gate = reg["p_bear"]
-            sl, tp = float(q90[i]), float(q10[i])
-        else:
-            gate = reg["p_chop"]
-            sl, tp = float(q10[i]), float(q90[i])
-
-        score = (abs(exp_ret) / w) * max(1e-6, gate) * 3.0
-        confidence = max(0.0, min(1.0, _sigmoid(score) * 0.999))
-
-        signals.append({
-            "h": int(i + 1),
-            "action": action,
-            "confidence": float(confidence),
-            "entry": last_price,
-            "sl": float(sl),
-            "tp": float(tp),
-            "q10": float(q10[i]),
-            "q50": float(q50[i]),
-            "q90": float(q90[i])
-        })
-
-    return {
-        "generated_at": now_utc_iso(),
-        "last_price": last_price,
-        "regime": reg["regime"],
-        "p_bull": reg["p_bull"], "p_bear": reg["p_bear"], "p_chop": reg["p_chop"],
-        "horizon": int(h),
-        # entregamos ambos nombres por compatibilidad con UIs distintas
-        "signals": signals,
-        "rows": signals
-    }
-
-# -----------------------------
-# Endpoints
-# -----------------------------
+# ---------- Endpoints ----------
 @app.get("/health")
 def health():
     REQ_COUNTER.labels(endpoint="/health", method="GET").inc()
@@ -250,12 +179,9 @@ async def forecast_ep(request: Request):
             coverage = float(payload.get("coverage", 0.9))
             q = forecast_core(y, horizon, coverage)
             reg = regime_core(y)
-            return {
-                "generated_at": now_utc_iso(),
-                "coverage_target": q["coverage"],
-                "quantiles": {k: q[k] for k in ["q05","q10","q50","q90","q95"]},
-                "regime": reg["regime"]
-            }
+            return {"generated_at": now_utc_iso(), "coverage_target": q["coverage"],
+                    "quantiles": {k: q[k] for k in ["q05","q10","q50","q90","q95"]},
+                    "regime": reg["regime"]}
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -292,8 +218,7 @@ async def signals_ep(request: Request):
             y = _payload_to_series(payload)
             horizon = int(payload.get("horizon", 24))
             coverage = float(payload.get("coverage", 0.9))
-            out = signals_core(y, horizon, coverage)
-            return out
+            return signals_core(y, horizon, coverage)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 

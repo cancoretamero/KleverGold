@@ -147,4 +147,69 @@ const styles = {
     gap: 12,
     justifyContent: "space-between",
   },
-  titleWrap: { display:
+  titleWrap: { display: "flex", alignItems: "center", gap: 12 },
+  title: { margin: 0, fontSize: 18, fontWeight: 700, color: "#111827" },
+  badge: {
+    fontSize: 12,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "#eef2ff",
+    color: "#3730a3",
+    fontWeight: 600,
+  },
+  regimeTag: {
+    fontSize: 12,
+    padding: "4px 8px",
+    borderRadius: 999,
+    fontWeight: 700,
+  },
+  footer: { marginTop: 8, display: "flex", justifyContent: "space-between" },
+};
+
+function toPct(v) {
+  if (!Number.isFinite(v)) return "—";
+  const val = v * 100;
+  const sign = val > 0 ? "+" : "";
+  return `${sign}${val.toFixed(2)}%`;
+}
+function clamp01(x) { return Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0)); }
+function pickBg(regime) { return regime === "bull" ? "#dcfce7" : regime === "bear" ? "#fee2e2" : "#e5e7eb"; }
+function pickFg(regime) { return regime === "bull" ? "#14532d" : regime === "bear" ? "#7f1d1d" : "#1f2937"; }
+
+/* Skeleton / Error */
+function CardSkeleton() {
+  return (
+    <section className="grid gap-4 md:grid-cols-2">
+      {[0,1].map(i => (
+        <div key={i} style={styles.card}>
+          <div style={styles.header}>
+            <div style={styles.titleWrap}>
+              <h3 style={styles.title}>EPITOME</h3>
+              <span style={styles.badge}>cargando…</span>
+            </div>
+          </div>
+          <div className="h-24 bg-gray-100 rounded-xl mt-3" />
+        </div>
+      ))}
+    </section>
+  );
+}
+function CardError({ err }) {
+  return (
+    <div style={styles.card}>
+      <div style={styles.header}>
+        <div style={styles.titleWrap}>
+          <h3 style={styles.title}>EPITOME</h3>
+          <span style={{...styles.badge, background:"#fee2e2", color:"#991b1b"}}>Error</span>
+        </div>
+      </div>
+      <pre className="mt-2 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-3 whitespace-pre-wrap">
+        {String(err)}
+      </pre>
+      <div className="text-[12px] text-gray-600 mt-2">
+        Verifica <code>public/config.js</code> (EPITOME_API), que el backend esté desplegado,
+        y que tu CSV tenga ≥ 120 filas para /risk.
+      </div>
+    </div>
+  );
+}

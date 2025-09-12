@@ -1,6 +1,5 @@
 // src/services/epitomeApi.js
-// Cliente ligero para llamar al backend EPITOME y utilidades para leer tu CSV.
-// Sin dependencias externas. Compatible con Vite/React.
+// Cliente ligero para el backend EPITOME + utilidades CSV. Sin dependencias externas.
 
 import { CONFIG } from "../config.js";
 
@@ -39,12 +38,10 @@ function pickColumn(headers, candidates) {
 /** Convierte una fecha cualquiera a ISO (Z) de forma segura. */
 function toIsoUTC(value) {
   if (!value) return null;
-  // Si ya viene con 'T', intentamos Date directo
   if (String(value).includes("T")) {
     const d = new Date(value);
     return isNaN(+d) ? null : d.toISOString();
   }
-  // Si es solo fecha 'YYYY-MM-DD', forzamos T00:00Z
   const d = new Date(`${value}T00:00:00Z`);
   return isNaN(+d) ? null : d.toISOString();
 }
@@ -85,34 +82,62 @@ export async function getHistoryFromCsv(csvUrl = CONFIG.CSV_URL) {
   return { timestamps, price };
 }
 
-/** Llama al endpoint /forecast del backend EPITOME. */
-export async function requestForecast({
-  timestamps,
-  price,
-  horizon = 24,
-  apiBase = CONFIG.EPITOME_API,
-}) {
+/* ===== FORECAST ===== */
+export async function requestForecast({ timestamps, price, horizon = 24, apiBase = CONFIG.EPITOME_API, }) {
   const url = `${apiBase.replace(/\/+$/, "")}/forecast`;
-  const body = { timestamps, price, exog: null, horizon };
-
   const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamps, price, exog: null, horizon }),
   });
-
-  if (!r.ok) {
-    const txt = await r.text().catch(() => "");
-    throw new Error(`Epitome API error ${r.status}: ${txt || r.statusText}`);
-  }
+  if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/forecast ${r.status}: ${t||r.statusText}`); }
   return await r.json();
 }
-
-/** Conveniencia: lee CSV, prepara payload y pide pronóstico en un paso. */
-export async function forecastFromCsv({
-  csvUrl = CONFIG.CSV_URL,
-  horizon = 24,
-} = {}) {
+export async function forecastFromCsv({ csvUrl = CONFIG.CSV_URL, horizon = 24 } = {}) {
   const { timestamps, price } = await getHistoryFromCsv(csvUrl);
   return await requestForecast({ timestamps, price, horizon });
+}
+
+/* ===== RISK ===== */
+export async function requestRisk({ timestamps, price, alpha = 0.05, apiBase = CONFIG.EPITOME_API, }) {
+  const url = `${apiBase.replace(/\/+$/, "")}/risk`;
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamps, price, alpha }),
+  });
+  if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/risk ${r.status}: ${t||r.statusText}`); }
+  return await r.json(); // { sigma, mu, var, es, alpha }
+}
+export async function riskFromCsv({ csvUrl = CONFIG.CSV_URL, alpha = 0.05 } = {}) {
+  const { timestamps, price } = await getHistoryFromCsv(csvUrl);
+  return await requestRisk({ timestamps, price, alpha });
+}
+
+/* ===== REGIME ===== */
+export async function requestRegime({ timestamps, price, apiBase = CONFIG.EPITOME_API, }) {
+  const url = `${apiBase.replace(/\/+$/, "")}/regime`;
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamps, price }),
+  });
+  if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/regime ${r.status}: ${t||r.statusText}`); }
+  return await r.json(); // { regime, p_bull, p_bear, p_chop }
+}
+export async function regimeFromCsv({ csvUrl = CONFIG.CSV_URL } = {}) {
+  const { timestamps, price } = await getHistoryFromCsv(csvUrl);
+  return await requestRegime({ timestamps, price });
+}
+
+/* ===== SIGNALS ===== */
+export async function requestSignals({ timestamps, price, horizon = 24, alpha = 0.05, apiBase = CONFIG.EPITOME_API, }) {
+  const url = `${apiBase.replace(/\/+$/, "")}/signals`;
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ timestamps, price, horizon, alpha }),
+  });
+  if (!r.ok) { const t = await r.text().catch(()=> ""); throw new Error(`/signals ${r.status}: ${t||r.statusText}`); }
+  return await r.json();
+}
+export async function signalsFromCsv({ csvUrl = CONFIG.CSV_URL, horizon = 24, alpha = 0.05 } = {}) {
+  const { timestamps, price } = await getHistoryFromCsv(csvUrl);
+  return await requestSignals({ timestamps, price, horizon, alpha });
 }

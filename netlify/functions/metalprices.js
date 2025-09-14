@@ -58,6 +58,10 @@ exports.handler = async (event) => {
       d.setUTCDate(d.getUTCDate() - 1);
       to = d.toISOString().slice(0, 10);
     }
+    // Nuevo: si 'from' es posterior a 'to', igualarlo a 'to'
+    if (from > to) {
+      from = to;
+    }
 
     // Extraer metal y base de symbol (ej. XAUUSD -> metal=XAU, base=USD)
     let metal = "XAU";

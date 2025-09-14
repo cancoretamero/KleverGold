@@ -1,22 +1,12 @@
-[build]
-  command = "npm install && npm run build"
-  publish = "dist"
+# netlify.toml — configura el directorio de funciones y CORS
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
 
-[build.environment]
-  NODE_VERSION = "20"
-
-# PROXY a Render (debe ir ANTES del catch-all SPA)
-[[redirects]]
-  from = "/api/*"
-  to = "https://klevergold-epitome.onrender.com/:splat"
-  status = 200
-  force = true
-
-# SPA redirect
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
-[build.processing]
-  skip_processing = true
+# CORS para las funciones (mismo origen en producción; esto permite preflight en local)
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type, Authorization"
+    Access-Control-Allow-Methods = "OPTIONS, POST"

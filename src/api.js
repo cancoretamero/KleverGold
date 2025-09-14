@@ -1,6 +1,4 @@
 // src/api.js — usa Functions (no expone claves)
-// - GET rangos faltantes vía /.netlify/functions/metalprices
-// - POST guardado CSV vía /.netlify/functions/update-csv
 
 export async function fetchMissingDaysSequential(dates, symbol = "XAUUSD") {
   const sorted = Array.from(new Set(dates)).sort();
@@ -20,13 +18,14 @@ export async function fetchMissingDaysOptimized(dates, symbol = "XAUUSD") {
   return dedupeByDate(parts.flat());
 }
 
-export async function persistRowsToRepo(rows) {
+export async function persistRowsToRepo(rows, symbol = "XAUUSD") {
   if (!rows || !rows.length) return { ok: true, added: 0 };
   const res = await fetch("/.netlify/functions/update-csv", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(rows.map((r) => ({
       date: (r.date instanceof Date ? r.date : new Date(r.date)).toISOString().slice(0,10),
+      symbol,
       open: num(r.open), high: num(r.high), low: num(r.low), close: num(r.close)
     }))),
   });

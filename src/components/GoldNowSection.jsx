@@ -1,118 +1,109 @@
 'use client';
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ReferenceLine } from 'recharts';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RTooltip,
+  ReferenceLine,
+} from 'recharts';
 import { RefreshCcw } from 'lucide-react';
 import { CONFIG } from '../config.js';
 
-/* ===================== SPOT robusto ===================== */
-async function httpJSON(url){ const r = await fetch(url); if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }
-function n(x){ const v = Number(x); return Number.isFinite(v) ? v : NaN; }
-
-/** Intenta varios formatos y normaliza a USD por XAU (USD/oz) */
+/* ========== NUEVO SPOT usando Netlify Function ========== */
+/**
+ * Consulta a la función `/.netlify/functions/metalprices` para obtener
+ * el último precio de XAU/USD. No requiere API key en el cliente.
+ * Devuelve { price, ts }, donde `price` es el cierre del día y `ts` la fecha (en ms).
+ */
 async function fetchSpotLatestRobust() {
-  if (!CONFIG.API_KEY) throw new Error('Falta API key');
   const SYM = CONFIG.SYMBOL || 'XAUUSD';
-  const base = 'USD';
-  const candidates = [
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=${SYM}`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=${SYM}`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&base=${base}&symbols=XAU`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=XAU`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=XAU`),
-  ];
-
-  let lastErr = null;
-  for (const u of candidates) {
-    try {
-      const j = await httpJSON(u.toString());
-      const { price, ts } = deriveUSDperXAU(j);
-      if (Number.isFinite(price)) return { price, ts };
-      lastErr = new Error('Spot sin precio válido');
-    } catch (e) { lastErr = e; }
+  // Pedimos solo el día de hoy (ISO YYYY-MM-DD)
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const url = new URL('/.netlify/functions/metalprices', window.location.origin);
+  url.searchParams.set('from', todayIso);
+  url.searchParams.set('to', todayIso);
+  url.searchParams.set('symbol', SYM);
+  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || !data.ok || !Array.isArray(data.rows) || !data.rows.length) {
+    throw new Error(data?.error || 'Spot no disponible');
   }
-  throw lastErr || new Error('Spot no disponible');
-}
-
-/** Calcula USD por XAU a partir de distintos shapes de respuesta */
-function deriveUSDperXAU(j){
-  let price = NaN; let ts = Date.now();
-
-  if (j?.rates) {
-    if (n(j.rates.XAUUSD)) price = n(j.rates.XAUUSD);
-    else if (n(j.rates.USDXAU)) price = 1 / n(j.rates.USDXAU);
-    else {
-      const base = j.base || j.source || '';
-      const rXAU = n(j.rates.XAU);
-      const rUSD = n(j.rates.USD);
-      if (base === 'USD' && Number.isFinite(rXAU)) price = 1 / rXAU;
-      else if (base === 'XAU' && Number.isFinite(rUSD)) price = rUSD;
-      else if (Number.isFinite(rUSD) && Number.isFinite(rXAU)) price = rUSD / rXAU;
-    }
-  } else if (j?.quotes) {
-    if (n(j.quotes.XAUUSD)) price = n(j.quotes.XAUUSD);
-    else if (n(j.quotes.USDXAU)) price = 1 / n(j.quotes.USDXAU);
-  } else if (n(j.rate)) {
-    price = n(j.rate);
-  } else if (n(j.price)) {
-    price = n(j.price);
-  } else if (j?.data) {
-    if (n(j.data?.XAUUSD)) price = n(j.data.XAUUSD);
-    else if (n(j.data?.price)) price = n(j.data.price);
-  }
-
-  if (j?.timestamp) ts = Number(j.timestamp) * 1000;
-  else if (j?.date) { const d = Date.parse(j.date); if (!Number.isNaN(d)) ts = d; }
-
-  if (!Number.isFinite(price) || price <= 0) return { price: NaN, ts };
-  if (price < 10) price = 1 / price; // heurística típico invertido
-
+  const row = data.rows[data.rows.length - 1];
+  const price = Number(row.close);
+  const ts    = new Date(row.date + 'T00:00:00Z').getTime();
+  if (!Number.isFinite(price) || price <= 0) throw new Error('Spot no válido');
   return { price, ts };
 }
 
-/* ===================== componente ===================== */
-const PALETTE = { fill:'#C7D2FE', stroke:'#818CF8', accent:'#0ea5e9', up:'#10b981', down:'#ef4444', grid:'rgba(0,0,0,0.06)' };
+/* ========== Parámetros visuales ========== */
+const PALETTE = {
+  fill: '#C7D2FE',
+  stroke: '#818CF8',
+  accent: '#0ea5e9',
+  up: '#10b981',
+  down: '#ef4444',
+  grid: 'rgba(0,0,0,0.06)',
+};
 
+/* ========== Componente ========== */
 export default function GoldNowSection({
   rows = [],
   onAppendRows,
   fetchMissingDaysSequential, // desde el padre vendrá la versión optimizada
 }) {
   const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
+  const [error, setError] = useState('');
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
 
   const [spot, setSpot] = useState(null);
   const [spotTs, setSpotTs] = useState(null);
   const [spotErr, setSpotErr] = useState('');
 
-  const iso = (d) => d.toISOString().slice(0,10);
-  const today = useMemo(() => new Date(new Date().toISOString().slice(0,10)), []); // UTC midnight
-  const yesterday = useMemo(() => { const d=new Date(today); d.setUTCDate(d.getUTCDate()-1); return d; }, [today]);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const today = useMemo(() => new Date(new Date().toISOString().slice(0, 10)), []); // UTC midnight
+  const yesterday = useMemo(() => {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return d;
+  }, [today]);
 
-  const ordered = useMemo(() => (rows || []).slice().sort((a,b) => +a.date - +b.date), [rows]);
-  const lastCsvDate = ordered.length ? ordered[ordered.length-1].date : null;
-  const lastClose   = ordered.length ? ordered[ordered.length-1].close : null;
-  const prevClose   = ordered.length > 1 ? ordered[ordered.length-2].close : null;
+  const ordered = useMemo(() => (rows || []).slice().sort((a, b) => +a.date - +b.date), [rows]);
+  const lastCsvDate = ordered.length ? ordered[ordered.length - 1].date : null;
+  const lastClose = ordered.length ? ordered[ordered.length - 1].close : null;
+  const prevClose = ordered.length > 1 ? ordered[ordered.length - 2].close : null;
   const lastDateIso = lastCsvDate ? iso(lastCsvDate) : null;
 
-  const sparkData = useMemo(() => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })), [ordered]);
+  const sparkData = useMemo(
+    () => ordered.slice(-60).map((r) => ({ t: iso(r.date), v: r.close })),
+    [ordered]
+  );
 
-  // Helpers
-  const yearsBetween = (a, b) => Math.max(0.0001, (b - a) / (365.25*24*3600*1000));
-  const firstRowOnOrAfter = (d) => ordered.find(r => +r.date >= +d);
+  // Helpers para CAGRs
+  const yearsBetween = (a, b) =>
+    Math.max(0.0001, (b - a) / (365.25 * 24 * 3600 * 1000));
+  const firstRowOnOrAfter = (d) => ordered.find((r) => +r.date >= +d);
 
-  // ====== CAGRs 1971 (AHORA USAN SPOT SI EXISTE) ======
+  // ====== CAGRs 1971 (usando spot si existe) ======
   const { cagrAdmin, cagrMarket } = useMemo(() => {
-    // precio final y fecha final — si hay spot lo usamos, si no el último cierre
-    const endPrice = Number.isFinite(spot) ? spot : (ordered[ordered.length-1]?.close ?? NaN);
-    const endDate  = Number.isFinite(spot) ? (spotTs || today) : (ordered[ordered.length-1]?.date ?? today);
+    const endPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : NaN;
+    const endDate =
+      Number.isFinite(spot) && spotTs
+        ? spotTs
+        : ordered.length
+        ? ordered[ordered.length - 1].date
+        : today;
+
     if (!Number.isFinite(endPrice)) return { cagrAdmin: null, cagrMarket: null };
 
     // 1971-08-15 con Pini=35 (paridad administrada)
     const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
     const nAdmin = yearsBetween(BASE_ADMIN_DATE, endDate);
-    const cagrAdmin = Math.pow(endPrice / 35, 1/nAdmin) - 1;
+    const cagrAdmin = Math.pow(endPrice / 35, 1 / nAdmin) - 1;
 
     // 1971-08-16 con Pini = primer cierre >= 1971-08-16 (fallback 43.40)
     const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
@@ -120,7 +111,10 @@ export default function GoldNowSection({
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
     const baseDateUsed = baseRow?.date || BASE_MKT_DATE;
     const nMarket = yearsBetween(baseDateUsed, endDate);
-    const cagrMarket = Math.pow(endPrice / Math.max(P_MARKET,1e-9), 1/nMarket) - 1;
+    const cagrMarket = Math.pow(
+      endPrice / Math.max(P_MARKET, 1e-9),
+      1 / nMarket
+    ) - 1;
 
     return { cagrAdmin, cagrMarket };
   }, [ordered, spot, spotTs, today]);
@@ -129,7 +123,11 @@ export default function GoldNowSection({
   const gapsToYesterday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
-    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000); d <= yesterday; d = new Date(d.getTime() + 86400000)) {
+    for (
+      let d = new Date(new Date(lastCsvDate).getTime() + 86400000);
+      d <= yesterday;
+      d = new Date(d.getTime() + 86400000)
+    ) {
       days.push(iso(d));
     }
     return days;
@@ -137,41 +135,77 @@ export default function GoldNowSection({
 
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
-  // SPOT
+  // SPOT: carga inicial y polling
   const refreshSpot = useCallback(async () => {
-    try { const { price, ts } = await fetchSpotLatestRobust(); setSpot(price); setSpotTs(new Date(ts)); setSpotErr(''); }
-    catch (e) { setSpotErr(String(e?.message || e)); }
+    try {
+      const { price, ts } = await fetchSpotLatestRobust();
+      setSpot(price);
+      setSpotTs(new Date(ts));
+      setSpotErr('');
+    } catch (e) {
+      setSpotErr(String(e?.message || e));
+    }
   }, []);
 
   // Botón: SPOT + OHLC (hasta AYER)
   const updateNow = useCallback(async () => {
-    setLoading(true); setError('');
+    setLoading(true);
+    setError('');
     try {
       await refreshSpot(); // spot al instante
       if (canFetch && gapsToYesterday.length) {
         const rowsNew = await fetchMissingDaysSequential(gapsToYesterday);
-        if (rowsNew?.length && typeof onAppendRows === 'function') onAppendRows(rowsNew);
+        if (rowsNew?.length && typeof onAppendRows === 'function')
+          onAppendRows(rowsNew);
       }
       setLastFetchedAt(new Date());
-    } catch (e) { setError(e?.message || 'No se pudo actualizar'); }
-    finally { setLoading(false); }
+    } catch (e) {
+      setError(e?.message || 'No se pudo actualizar');
+    } finally {
+      setLoading(false);
+    }
   }, [refreshSpot, canFetch, gapsToYesterday, onAppendRows]);
 
-  // Auto: rellena huecos y primer spot
-  useEffect(() => { updateNow(); }, []); // eslint-disable-line
-  // Polling spot
-  useEffect(() => { const id = setInterval(refreshSpot, 60_000); return () => clearInterval(id); }, [refreshSpot]);
+  // Auto: rellena huecos y primer spot al montar
+  useEffect(() => {
+    updateNow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const displayPrice = Number.isFinite(spot) ? spot : (Number.isFinite(lastClose) ? lastClose : null);
-  const delta = (Number.isFinite(lastClose) && Number.isFinite(prevClose)) ? (lastClose - prevClose) : null;
-  const deltaPct = (Number.isFinite(lastClose) && Number.isFinite(prevClose) && prevClose !== 0) ? (lastClose/prevClose - 1) : null;
+  // Polling spot cada 60 segundos
+  useEffect(() => {
+    const id = setInterval(refreshSpot, 60_000);
+    return () => clearInterval(id);
+  }, [refreshSpot]);
+
+  // Cálculo delta y displayPrice
+  const displayPrice = Number.isFinite(spot)
+    ? spot
+    : Number.isFinite(lastClose)
+    ? lastClose
+    : null;
+  const delta =
+    Number.isFinite(lastClose) && Number.isFinite(prevClose)
+      ? lastClose - prevClose
+      : null;
+  const deltaPct =
+    Number.isFinite(lastClose) &&
+    Number.isFinite(prevClose) &&
+    prevClose !== 0
+      ? lastClose / prevClose - 1
+      : null;
 
   return (
     <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-semibold">Últimos datos del oro</div>
-        <button onClick={updateNow} disabled={loading} className="inline-flex items-center gap-2 text-xs rounded-md border px-2 py-1 disabled:opacity-60">
-          <RefreshCcw className="w-3.5 h-3.5" /> {loading ? 'Actualizando…' : 'Actualizar ahora'}
+        <button
+          onClick={updateNow}
+          disabled={loading}
+          className="inline-flex items-center gap-2 text-xs rounded-md border px-2 py-1 disabled:opacity-60"
+        >
+          <RefreshCcw className="w-3.5 h-3.5" />{' '}
+          {loading ? 'Actualizando…' : 'Actualizar ahora'}
         </button>
       </div>
 
@@ -179,25 +213,55 @@ export default function GoldNowSection({
         <div className="md:col-span-2 space-y-1">
           <div className="flex items-end gap-3">
             <div className="text-3xl font-bold tracking-tight">
-              {Number.isFinite(displayPrice) ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'}
+              {Number.isFinite(displayPrice)
+                ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 })
+                : '—'}
             </div>
             {Number.isFinite(delta) && (
-              <span className={`text-sm font-medium ${delta>=0?'text-emerald-600':'text-rose-600'}`}>
-                {delta>=0?'+':''}{delta.toFixed(2)} ({deltaPct>=0?'+':''}{(deltaPct*100).toFixed(2)}%)
+              <span
+                className={`text-sm font-medium ${
+                  delta >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                }`}
+              >
+                {delta >= 0 ? '+' : ''}
+                {delta.toFixed(2)} (
+                {deltaPct >= 0 ? '+' : ''}
+                {(deltaPct * 100).toFixed(2)}%)
               </span>
             )}
           </div>
           <div className="text-[11px] text-gray-500">
             {`Hoy ${iso(today)} · último cierre CSV: ${lastDateIso || '—'}`}
             {spotTs && ` · spot ${spotTs.toLocaleTimeString()}`}
-            {spotErr && <span className="ml-2 text-amber-700">(Spot: {spotErr})</span>}
-            {lastFetchedAt && ` · OHLC actualizado ${lastFetchedAt.toLocaleTimeString()}`}
+            {spotErr && (
+              <span className="ml-2 text-amber-700">(Spot: {spotErr})</span>
+            )}
+            {lastFetchedAt &&
+              ` · OHLC actualizado ${lastFetchedAt.toLocaleTimeString()}`}
           </div>
         </div>
 
         <div className="flex items-start justify-end gap-2">
-          <GlassChip label="CAGR 1971 (35 USD)" value={cagrAdmin!=null ? `${(cagrAdmin*100).toFixed(2)}%` : '—'} tone={cagrAdmin!=null ? (cagrAdmin>=0?'pos':'neg') : 'neutral'} />
-          <GlassChip label="CAGR 1971 (1er cierre)" value={cagrMarket!=null ? `${(cagrMarket*100).toFixed(2)}%` : '—'} tone={cagrMarket!=null ? (cagrMarket>=0?'pos':'neg') : 'neutral'} />
+          <GlassChip
+            label="CAGR 1971 (35 USD)"
+            value={
+              cagrAdmin != null
+                ? `${(cagrAdmin * 100).toFixed(2)}%`
+                : '—'
+            }
+            tone={cagrAdmin != null ? (cagrAdmin >= 0 ? 'pos' : 'neg') : 'neutral'}
+          />
+          <GlassChip
+            label="CAGR 1971 (1er cierre)"
+            value={
+              cagrMarket != null
+                ? `${(cagrMarket * 100).toFixed(2)}%`
+                : '—'
+            }
+            tone={
+              cagrMarket != null ? (cagrMarket >= 0 ? 'pos' : 'neg') : 'neutral'
+            }
+          />
         </div>
       </div>
 
@@ -205,11 +269,28 @@ export default function GoldNowSection({
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={sparkData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 6" stroke={PALETTE.grid} />
-            <XAxis dataKey="t" tick={{ fill: '#111', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={32} />
-            <YAxis tick={{ fill: '#111', fontSize: 11 }} tickLine={false} axisLine={false} width={44} />
+            <XAxis
+              dataKey="t"
+              tick={{ fill: '#111', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={32}
+            />
+            <YAxis
+              tick={{ fill: '#111', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
+              width={44}
+            />
             <ReferenceLine y={0} stroke="#111" opacity={0.1} />
             <RTooltip cursor={false} content={<SparkGlassTooltip />} />
-            <Area type="monotone" dataKey="v" stroke={PALETTE.stroke} strokeWidth={1.6} fill={PALETTE.fill + '66'} />
+            <Area
+              type="monotone"
+              dataKey="v"
+              stroke={PALETTE.stroke}
+              strokeWidth={1.6}
+              fill={PALETTE.fill + '66'}
+            />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -220,26 +301,44 @@ export default function GoldNowSection({
 }
 
 /* ======== UI helpers ======== */
-function GlassChip({ label, value, tone='neutral' }) {
-  const toneCls = tone==='pos' ? 'text-emerald-700' : tone==='neg' ? 'text-rose-700' : 'text-gray-900/90';
+function GlassChip({ label, value, tone = 'neutral' }) {
+  const toneCls =
+    tone === 'pos'
+      ? 'text-emerald-700'
+      : tone === 'neg'
+      ? 'text-rose-700'
+      : 'text-gray-900/90';
   return (
-    <div className={`relative rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.6)] px-3 py-2 ${toneCls}`}
-         style={{ backdropFilter: 'blur(12px) saturate(170%)', WebkitBackdropFilter: 'blur(12px) saturate(170%)' }}>
+    <div
+      className={`relative rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.6)] px-3 py-2 ${toneCls}`}
+      style={{
+        backdropFilter: 'blur(12px) saturate(170%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(170%)',
+      }}
+    >
       <div className="font-medium">{value}</div>
       <div className="text-[10px] text-gray-600">{label}</div>
       <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
     </div>
   );
 }
+
 function SparkGlassTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
   const v = payload[0]?.value;
   return (
-    <div className="relative min-w-[160px] rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.6)]"
-         style={{ backdropFilter: 'blur(14px) saturate(170%)', WebkitBackdropFilter: 'blur(14px) saturate(170%)' }}>
+    <div
+      className="relative min-w-[160px] rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.6)]"
+      style={{
+        backdropFilter: 'blur(14px) saturate(170%)',
+        WebkitBackdropFilter: 'blur(14px) saturate(170%)',
+      }}
+    >
       <div className="p-2">
         <div className="font-medium text-gray-900/90">{label}</div>
-        <div className="text-right font-semibold text-gray-900/90">{Number.isFinite(v)? Number(v).toLocaleString('es-ES'):'—'}</div>
+        <div className="text-right font-semibold text-gray-900/90">
+          {Number.isFinite(v) ? Number(v).toLocaleString('es-ES') : '—'}
+        </div>
       </div>
       <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
     </div>

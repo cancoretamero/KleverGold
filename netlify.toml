@@ -3,7 +3,7 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-# CORS para las funciones (mismo origen en producción; esto permite preflight en local)
+# CORS para las funciones (preflight y llamadas POST desde el frontend)
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]

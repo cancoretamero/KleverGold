@@ -1,12 +1,7 @@
-// public/config.js
-
-// Clave pública opcional (si usas Metals)
-window.METALS_API_KEY = window.METALS_API_KEY || "0zs12hfbt7uf6jf5brv7xpq8o8175lpnwmpamvqkoz238mjqjyxxhdji4fb4";
-
-// === EPITOME (backend en la nube) ===
-// Ajusta esta URL si Render te da otra distinta.
-window.EPITOME_API = "https://klevergold-epitome.onrender.com";
-window.EPITOME_ON = true;
-
-// (Opcional)
-// window.CSV_URL = window.CSV_URL || "./data/xauusd_ohlc_clean.csv";
+// public/config.js — copia limpia (sin Epitome), igual que /config.js
+window.METALS_API_KEY = window.METALS_API_KEY || "";
+window.API_BASE = window.API_BASE || "";
+window.SYMBOL = window.SYMBOL || "XAUUSD";
+window.CSV_URL = window.CSV_URL || "./data/xauusd_ohlc_clean.csv";
+window.REQUEST_DELAY_MS = window.REQUEST_DELAY_MS || 1100;
+export {};

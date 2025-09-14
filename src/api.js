@@ -1,4 +1,4 @@
-// src/api.js — usa Functions (no expone claves)
+// src/api.js — usa Netlify Functions (no expone claves en el cliente)
 
 export async function fetchMissingDaysSequential(dates, symbol = "XAUUSD") {
   const sorted = Array.from(new Set(dates)).sort();
@@ -30,7 +30,7 @@ export async function persistRowsToRepo(rows, symbol = "XAUUSD") {
     }))),
   });
   if (!res.ok) {
-    const text = await res.text().catch(()=> "");
+    const text = await res.text().catch(() => "");
     throw new Error("update-csv fallo: " + res.status + " " + text);
   }
   return await res.json();
@@ -43,7 +43,7 @@ export async function getCsvInfo() {
   return j; // { ok, lastDate, path, branch, size, sha }
 }
 
-// === Helpers ===
+// ===== Helpers =====
 function packIntoRanges(dates) {
   if (!dates.length) return [];
   const toDate = (s) => new Date(s + "T00:00:00Z");
@@ -53,7 +53,7 @@ function packIntoRanges(dates) {
   const ranges = [];
   let start = toDate(dates[0]);
   let prev = toDate(dates[0]);
-  for (let i=1; i<dates.length; i++) {
+  for (let i = 1; i < dates.length; i++) {
     const cur = toDate(dates[i]);
     if (+cur - +addDay(prev) > 0) {
       ranges.push([fmt(start), fmt(prev)]);

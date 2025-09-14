@@ -1,4 +1,4 @@
-// src/api.js — usa Netlify Functions (no expone claves en el cliente)
+// src/api.js — usa Netlify Functions
 
 export async function fetchMissingDaysSequential(dates, symbol = "XAUUSD") {
   const sorted = Array.from(new Set(dates)).sort();
@@ -19,18 +19,18 @@ export async function fetchMissingDaysOptimized(dates, symbol = "XAUUSD") {
 }
 
 export async function persistRowsToRepo(rows, symbol = "XAUUSD") {
-  if (!rows || !rows.length) return { ok: true, added: 0 };
+  if (!rows || !rows.length) return { ok:true, added:0 };
   const res = await fetch("/.netlify/functions/update-csv", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(rows.map((r) => ({
+    body: JSON.stringify(rows.map(r => ({
       date: (r.date instanceof Date ? r.date : new Date(r.date)).toISOString().slice(0,10),
       symbol,
       open: num(r.open), high: num(r.high), low: num(r.low), close: num(r.close)
     }))),
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await res.text().catch(()=>"");
     throw new Error("update-csv fallo: " + res.status + " " + text);
   }
   return await res.json();
@@ -40,20 +40,20 @@ export async function getCsvInfo() {
   const res = await fetch("/.netlify/functions/csv-info");
   const j = await res.json().catch(() => null);
   if (!res.ok || !j || !j.ok) throw new Error("csv-info fallo: " + (j?.error || res.status));
-  return j; // { ok, lastDate, path, branch, size, sha }
+  return j;
 }
 
 // ===== Helpers =====
 function packIntoRanges(dates) {
   if (!dates.length) return [];
-  const toDate = (s) => new Date(s + "T00:00:00Z");
-  const addDay = (d) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + 1); return x; };
-  const fmt = (d) => d.toISOString().slice(0,10);
+  const toDate = s => new Date(s + "T00:00:00Z");
+  const addDay = d => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + 1); return x; };
+  const fmt = d => d.toISOString().slice(0,10);
 
   const ranges = [];
   let start = toDate(dates[0]);
   let prev = toDate(dates[0]);
-  for (let i = 1; i < dates.length; i++) {
+  for (let i=1; i<dates.length; i++) {
     const cur = toDate(dates[i]);
     if (+cur - +addDay(prev) > 0) {
       ranges.push([fmt(start), fmt(prev)]);
@@ -75,7 +75,7 @@ async function getRangeFromServer(from, to, symbol) {
   if (!res.ok || !j || !j.ok) {
     throw new Error("metalprices proxy fallo: " + (j?.error || res.status));
   }
-  return (j.rows || []).map((r) => {
+  return (j.rows || []).map(r => {
     const d = new Date(String(r.date).slice(0,10) + "T00:00:00Z");
     const open  = num(r.open), high = num(r.high), low = num(r.low), close = num(r.close);
     return {

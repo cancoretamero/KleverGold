@@ -1,12 +1,19 @@
-// /config.js (RAÍZ DEL PROYECTO) — CARGA ANTES DEL BUNDLE
-window.METALS_API_KEY = "0zs12hfbt7uf6jf5brv7xpq8o8175lpnwmpamvqkoz238mjqjyxxhdji4fb4";
+// /config.js (RAÍZ) — versión mínima sin Epitome
+// Clave pública para tu proveedor de metales (opcional si usas solo CSV)
+window.METALS_API_KEY = window.METALS_API_KEY || "";
 
-// === EPITOME (proxyado por Netlify) ===
-window.EPITOME_API = "/api";      // <<<<< clave para evitar CORS
-window.EPITOME_ON = true;
+// (Opcional) Base URL de tu API de metales (cuando la conectes)
+// Ejemplo: "https://api.tu-proveedor.com/v1"
+window.API_BASE = window.API_BASE || "";
 
-// CSV de arranque
+// (Opcional) Símbolo a usar
+window.SYMBOL = window.SYMBOL || "XAUUSD";
+
+// (Opcional) CSV inicial
 window.CSV_URL = window.CSV_URL || "./data/xauusd_ohlc_clean.csv";
 
-// Módulo ES válido
+// (Opcional) throttling entre llamadas si tu API lo requiere
+window.REQUEST_DELAY_MS = window.REQUEST_DELAY_MS || 1100;
+
+// Módulo ES válido (no borres)
 export {};

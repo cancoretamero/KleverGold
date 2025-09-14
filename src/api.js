@@ -30,13 +30,20 @@ export async function persistRowsToRepo(rows, symbol = "XAUUSD") {
     }))),
   });
   if (!res.ok) {
-    const text = await res.text().catch(()=>"");
+    const text = await res.text().catch(()=> "");
     throw new Error("update-csv fallo: " + res.status + " " + text);
   }
   return await res.json();
 }
 
-// ===== Helpers =====
+export async function getCsvInfo() {
+  const res = await fetch("/.netlify/functions/csv-info");
+  const j = await res.json().catch(() => null);
+  if (!res.ok || !j || !j.ok) throw new Error("csv-info fallo: " + (j?.error || res.status));
+  return j; // { ok, lastDate, path, branch, size, sha }
+}
+
+// === Helpers ===
 function packIntoRanges(dates) {
   if (!dates.length) return [];
   const toDate = (s) => new Date(s + "T00:00:00Z");

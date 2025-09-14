@@ -1,3 +1,4 @@
+// src/components/GoldNowSection.jsx
 'use client';
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
@@ -15,15 +16,25 @@ import { RefreshCcw } from 'lucide-react';
 import { CONFIG } from '../config.js';
 
 // ===================== SPOT via serverless =====================
+/**
+ * Obtiene el último precio disponible (aprox. spot) de oro llamando a la función
+ * serverless metalprices. Para cumplir las restricciones de Metals‑API, siempre
+ * consulta el día de ayer, no la fecha actual.
+ */
 async function fetchSpotLatestRobust() {
   const SYM = CONFIG.SYMBOL || 'XAUUSD';
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Calcular fecha de ayer en formato ISO (YYYY-MM-DD)
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  const isoDate = d.toISOString().slice(0, 10);
+  // Construir URL hacia la función metalprices
   const url = new URL('/.netlify/functions/metalprices', window.location.origin);
-  url.searchParams.set('from', todayIso);
-  url.searchParams.set('to', todayIso);
+  url.searchParams.set('from', isoDate);
+  url.searchParams.set('to', isoDate);
   url.searchParams.set('symbol', SYM);
   const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
   const data = await res.json().catch(() => null);
+  // Comprobar validez de la respuesta
   if (!res.ok || !data || !data.ok || !Array.isArray(data.rows) || !data.rows.length) {
     throw new Error(data?.error || 'Spot no disponible');
   }
@@ -34,7 +45,7 @@ async function fetchSpotLatestRobust() {
   return { price, ts };
 }
 
-// Paleta
+// Paleta de colores del gráfico
 const PALETTE = {
   fill: '#C7D2FE',
   stroke: '#818CF8',
@@ -43,6 +54,10 @@ const PALETTE = {
   grid: 'rgba(0,0,0,0.06)',
 };
 
+/**
+ * Componente principal que muestra la sección de “Ahora” con el precio de oro,
+ * los datos históricos, las variaciones diarias y los botones de actualización.
+ */
 export default function GoldNowSection({
   rows = [],
   onAppendRows,
@@ -56,6 +71,7 @@ export default function GoldNowSection({
   const [spotTs, setSpotTs] = useState(null);
   const [spotErr, setSpotErr] = useState('');
 
+  // Formatea un Date a ISO (YYYY-MM-DD)
   const iso = d => d.toISOString().slice(0, 10);
   const today = useMemo(() => new Date(new Date().toISOString().slice(0, 10)), []);
   const yesterday = useMemo(() => {
@@ -64,28 +80,37 @@ export default function GoldNowSection({
     return d;
   }, [today]);
 
+  // Ordenar las filas por fecha ascendente
   const ordered = useMemo(() => (rows || []).slice().sort((a,b) => +a.date - +b.date), [rows]);
   const lastCsvDate = ordered.length ? ordered[ordered.length - 1].date : null;
   const lastClose   = ordered.length ? ordered[ordered.length - 1].close : null;
   const prevClose   = ordered.length > 1 ? ordered[ordered.length - 2].close : null;
   const lastDateIso = lastCsvDate ? iso(lastCsvDate) : null;
 
-  const sparkData = useMemo(() => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })), [ordered]);
+  // Datos para el mini gráfico de la derecha (últimos 60 días)
+  const sparkData = useMemo(
+    () => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })),
+    [ordered]
+  );
 
-  // Helpers CAGRs
+  // ===== Helpers para CAGRs =====
   const yearsBetween = (a,b) => Math.max(0.0001, (b - a) / (365.25 * 24 * 3600 * 1000));
   const firstRowOnOrAfter = d => ordered.find(r => +r.date >= +d);
 
   const { cagrAdmin, cagrMarket } = useMemo(() => {
     const endPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : NaN;
-    const endDate  = Number.isFinite(spot) && spotTs ? spotTs : ordered.length ? ordered[ordered.length - 1].date : today;
-    if (!Number.isFinite(endPrice)) return { cagrAdmin:null, cagrMarket:null };
+    const endDate  = Number.isFinite(spot) && spotTs
+      ? spotTs
+      : ordered.length
+        ? ordered[ordered.length - 1].date
+        : today;
+    if (!Number.isFinite(endPrice)) return { cagrAdmin: null, cagrMarket: null };
 
-    const BASE_ADMIN_DATE = new Date(Date.UTC(1971,7,15));
+    const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
     const nAdmin = yearsBetween(BASE_ADMIN_DATE, endDate);
     const cagrAdmin = Math.pow(endPrice / 35, 1/nAdmin) - 1;
 
-    const BASE_MKT_DATE = new Date(Date.UTC(1971,7,16));
+    const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
     const baseRow = firstRowOnOrAfter(BASE_MKT_DATE);
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
     const baseDateUsed = baseRow?.date || BASE_MKT_DATE;
@@ -95,18 +120,28 @@ export default function GoldNowSection({
     return { cagrAdmin, cagrMarket };
   }, [ordered, spot, spotTs, today]);
 
+  /**
+   * Calcula qué días faltan entre la última fecha del CSV y ayer. Devuelve un
+   * array de cadenas ISO (YYYY-MM-DD). Si no falta ningún día, devuelve [].
+   */
   const gapsToYesterday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
-    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000); d <= yesterday; d = new Date(d.getTime() + 86400000)) {
+    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000);
+         d <= yesterday;
+         d = new Date(d.getTime() + 86400000)) {
       days.push(iso(d));
     }
     return days;
   }, [lastCsvDate, yesterday]);
 
+  // Flag para saber si podemos pedir filas nuevas
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
-  // Spot refresh
+  /**
+   * Refresca el spot consultando la función serverless. Si hay error,
+   * actualiza el estado spotErr.
+   */
   const refreshSpot = useCallback(async () => {
     try {
       const { price, ts } = await fetchSpotLatestRobust();
@@ -118,7 +153,10 @@ export default function GoldNowSection({
     }
   }, []);
 
-  // Botón: Spot + OHLC
+  /**
+   * Maneja el clic en “Actualizar ahora”. Actualiza el spot y, si faltan días
+   * en el CSV, los pide mediante fetchMissingDaysSequential() y los añade.
+   */
   const updateNow = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -136,98 +174,92 @@ export default function GoldNowSection({
     }
   }, [refreshSpot, canFetch, gapsToYesterday, onAppendRows]);
 
-  // Auto al montar
-  useEffect(() => { updateNow(); }, []); // eslint-disable-line
+  // Al montar el componente, solicitar datos al instante
+  useEffect(() => { updateNow(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Refrescar sólo el spot cada minuto
   useEffect(() => {
     const id = setInterval(refreshSpot, 60_000);
     return () => clearInterval(id);
   }, [refreshSpot]);
 
+  // Datos derivados para la UI
   const displayPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : null;
   const delta = Number.isFinite(lastClose) && Number.isFinite(prevClose) ? lastClose - prevClose : null;
-  const deltaPct = Number.isFinite(lastClose) && Number.isFinite(prevClose) && prevClose !== 0 ? lastClose/prevClose - 1 : null;
+  const deltaPct = Number.isFinite(lastClose) && Number.isFinite(prevClose) && prevClose !== 0
+    ? lastClose/prevClose - 1
+    : null;
 
   return (
-    <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm font-semibold">Últimos datos del oro</div>
-        <button onClick={updateNow} disabled={loading} className="inline-flex items-center gap-2 text-xs rounded-md border px-2 py-1 disabled:opacity-60">
-          <RefreshCcw className="w-3.5 h-3.5" />
+    <div className="border rounded-lg p-4">
+      {/* Encabezado con botón de refresco */}
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-lg font-semibold">Últimos datos del oro</h2>
+        <button
+          onClick={updateNow}
+          className="flex items-center px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          disabled={loading}
+        >
+          <RefreshCcw className="w-4 h-4 mr-1" />
           {loading ? 'Actualizando…' : 'Actualizar ahora'}
         </button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="md:col-span-2 space-y-1">
-          <div className="flex items-end gap-3">
-            <div className="text-3xl font-bold tracking-tight">
-              {Number.isFinite(displayPrice) ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'}
+      {/* Sección principal: precio y variaciones */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-2xl font-bold">
+            {Number.isFinite(displayPrice)
+              ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 })
+              : '—'}
+          </div>
+          {Number.isFinite(delta) && (
+            <div className={`text-sm ${delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {delta >= 0 ? '+' : ''}{delta.toFixed(2)} ({(deltaPct * 100).toFixed(2)}%)
             </div>
-            {Number.isFinite(delta) && (
-              <span className={`text-sm font-medium ${delta>=0?'text-emerald-600':'text-rose-600'}`}>
-                {delta>=0?'+':''}{delta.toFixed(2)} ({deltaPct>=0?'+':''}{(deltaPct*100).toFixed(2)}%)
-              </span>
-            )}
-          </div>
-          <div className="text-[11px] text-gray-500">
-            {`Hoy ${iso(today)} · último cierre CSV: ${lastDateIso || '—'}`}
-            {spotTs && ` · spot ${spotTs.toLocaleTimeString()}`}
-            {spotErr && <span className="ml-2 text-amber-700">(Spot: {spotErr})</span>}
-            {lastFetchedAt && ` · OHLC actualizado ${lastFetchedAt.toLocaleTimeString()}`}
+          )}
+          {spotErr && <div className="text-sm text-rose-600">{spotErr}</div>}
+        </div>
+        <div className="mt-4 sm:mt-0">
+          {/* Mini gráfico de los últimos 60 días */}
+          <ResponsiveContainer width={200} height={80}>
+            <AreaChart data={sparkData}>
+              <CartesianGrid stroke={PALETTE.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="t" hide />
+              <YAxis domain={['dataMin', 'dataMax']} hide />
+              <Area
+                type="monotone"
+                dataKey="v"
+                stroke={PALETTE.stroke}
+                fill={PALETTE.fill}
+                fillOpacity={0.4}
+                dot={false}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Sección de CAGRs */}
+      <div className="mt-4 flex space-x-4">
+        <div>
+          <div className="text-sm text-gray-500">CAGR Admin (desde 1971-08-15)</div>
+          <div className="text-lg font-medium">
+            {Number.isFinite(cagrAdmin) ? (cagrAdmin * 100).toFixed(2) + '%' : '—'}
           </div>
         </div>
-
-        <div className="flex items-start justify-end gap-2">
-          <GlassChip label="CAGR 1971 (35 USD)" value={cagrAdmin != null ? `${(cagrAdmin*100).toFixed(2)}%` : '—'} tone={cagrAdmin != null ? (cagrAdmin>=0?'pos':'neg') : 'neutral'} />
-          <GlassChip label="CAGR 1971 (1er cierre)" value={cagrMarket != null ? `${(cagrMarket*100).toFixed(2)}%` : '—'} tone={cagrMarket != null ? (cagrMarket>=0?'pos':'neg') : 'neutral'} />
+        <div>
+          <div className="text-sm text-gray-500">CAGR Market (desde 1971-08-16)</div>
+          <div className="text-lg font-medium">
+            {Number.isFinite(cagrMarket) ? (cagrMarket * 100).toFixed(2) + '%' : '—'}
+          </div>
         </div>
+        {lastFetchedAt && (
+          <div className="text-sm text-gray-500">Actualizado: {lastFetchedAt.toLocaleString('es-ES')}</div>
+        )}
       </div>
 
-      <div className="mt-4 h-[160px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={sparkData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 6" stroke={PALETTE.grid} />
-            <XAxis dataKey="t" tick={{ fill:'#111', fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={32} />
-            <YAxis tick={{ fill:'#111', fontSize: 11 }} tickLine={false} axisLine={false} width={44} />
-            <ReferenceLine y={0} stroke="#111" opacity={0.1} />
-            <RTooltip cursor={false} content={<SparkGlassTooltip />} />
-            <Area type="monotone" dataKey="v" stroke={PALETTE.stroke} strokeWidth={1.6} fill={PALETTE.fill + '66'} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      {error && <div className="mt-2 text-xs text-rose-700">{error}</div>}
-    </section>
-  );
-}
-
-// ====== UI helpers ======
-function GlassChip({ label, value, tone='neutral' }) {
-  const toneClass =
-    tone === 'pos' ? 'text-emerald-700' :
-    tone === 'neg' ? 'text-rose-700' :
-    'text-gray-900/90';
-  return (
-    <div className={`relative rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.6)] px-3 py-2 ${toneClass}`}
-         style={{ backdropFilter:'blur(12px) saturate(170%)', WebkitBackdropFilter:'blur(12px) saturate(170%)' }}>
-      <div className="font-medium">{value}</div>
-      <div className="text-[10px] text-gray-600">{label}</div>
-      <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
-    </div>
-  );
-}
-
-function SparkGlassTooltip({ active, payload, label }) {
-  if (!active || !payload || !payload.length) return null;
-  const v = payload[0]?.value;
-  return (
-    <div className="relative min-w-[160px] rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.6)]"
-         style={{ backdropFilter:'blur(14px) saturate(170%)', WebkitBackdropFilter:'blur(14px) saturate(170%)' }}>
-      <div className="p-2">
-        <div className="font-medium text-gray-900/90">{label}</div>
-        <div className="text-right font-semibold text-gray-900/90">{Number.isFinite(v) ? Number(v).toLocaleString('es-ES') : '—'}</div>
-      </div>
-      <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
+      {/* Mostrar errores generales (distintos de spotErr) */}
+      {error && <div className="mt-2 text-sm text-rose-600">{error}</div>}
     </div>
   );
 }

@@ -1,120 +1,153 @@
 // netlify/functions/update-csv.js
-export const config = { runtime: 'nodejs18' };
+// Serverless para MERGEAR nuevas filas OHLC en un CSV del repo (GitHub Contents API)
 
-const CSV_PATH   = process.env.CSV_PATH || 'data/xauusd_ohlc_clean.csv';
-const GITHUB_REPO = process.env.GITHUB_REPO; // "owner/repo"
-const GITHUB_BRANCH = process.env.GITHUB_BRANCH || 'main';
-const GH = 'https://api.github.com';
+const encoder = (s) => Buffer.from(s, 'utf8').toString('base64');
+const decoder = (b64) => Buffer.from(b64, 'base64').toString('utf8');
 
-export default async function handler(req, res) {
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'OPTIONS, POST',
+};
+
+exports.handler = async (event) => {
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ error: 'Use POST' });
+    if (event.httpMethod === 'OPTIONS') {
+      return { statusCode: 204, headers: CORS, body: '' };
     }
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return res.status(500).json({ error: 'Missing GITHUB_TOKEN' });
-    if (!GITHUB_REPO) return res.status(500).json({ error: 'Missing GITHUB_REPO (owner/repo)' });
-
-    const rowsNew = await readJson(req);
-    if (!Array.isArray(rowsNew) || rowsNew.length === 0) {
-      return res.status(200).json({ ok: true, updated: 0, reason: 'no rows' });
+    if (event.httpMethod !== 'POST') {
+      return { statusCode: 405, headers: CORS, body: 'Method Not Allowed' };
     }
 
-    const [owner, repo] = GITHUB_REPO.split('/');
-    // 1) Leer CSV actual
-    const getResp = await fetch(`${GH}/repos/${owner}/${repo}/contents/${encodeURIComponent(CSV_PATH)}?ref=${encodeURIComponent(GITHUB_BRANCH)}`, {
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'netlify-fn' }
+    // --- ENV obligatorios/útiles ---
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const REPO_OWNER   = process.env.REPO_OWNER   || 'cancoretamero';
+    const REPO_NAME    = process.env.REPO_NAME    || 'KleverGold';
+    const CSV_PATH     = process.env.CSV_PATH     || 'public/data/xauusd_ohlc_clean.csv';
+    const CSV_BRANCH   = process.env.CSV_BRANCH   || 'main';
+
+    if (!GITHUB_TOKEN) {
+      return { statusCode: 500, headers: CORS, body: JSON.stringify({ ok:false, error:'Falta GITHUB_TOKEN en variables de entorno' }) };
+    }
+
+    // --- Payload esperado: [{ date:'YYYY-MM-DD', open, high, low, close }, ...]
+    let rowsNew = [];
+    try {
+      rowsNew = JSON.parse(event.body || '[]');
+      if (!Array.isArray(rowsNew)) throw new Error('Body debe ser array');
+    } catch (e) {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ ok:false, error:'JSON inválido' }) };
+    }
+
+    // Normaliza/valida entradas
+    const norm = (r) => {
+      const d = String(r.date || '').slice(0,10);
+      const open  = Number(r.open);
+      const high  = Number(r.high);
+      const low   = Number(r.low);
+      const close = Number(r.close);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+      if (![open,high,low,close].every(Number.isFinite)) return null;
+      // sanity high/low
+      const hi = Math.max(high, open, close);
+      const lo = Math.min(low, open, close);
+      return { date:d, open, high:hi, low:lo, close };
+    };
+    rowsNew = rowsNew.map(norm).filter(Boolean);
+    if (!rowsNew.length) {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ ok:false, error:'Sin filas válidas' }) };
+    }
+
+    // --- Lee CSV actual de GitHub
+    const apiBase = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${encodeURIComponent(CSV_PATH)}`;
+    const getRes = await fetch(`${apiBase}?ref=${encodeURIComponent(CSV_BRANCH)}`, {
+      headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, 'User-Agent': 'klevergold-bot' }
     });
-    if (!getResp.ok) {
-      const t = await getResp.text();
-      return res.status(500).json({ error: 'GET content failed', detail: t });
-    }
-    const getJson = await getResp.json();
-    const sha = getJson.sha;
-    const csvBase64 = getJson.content;
-    const csvText = Buffer.from(csvBase64, 'base64').toString('utf-8');
 
-    // 2) Parse y merge por fecha (YYYY-MM-DD)
-    const current = csvToMap(csvText); // Map<string, Row>
-    let updated = 0;
-    for (const r of rowsNew) {
-      const k = toISO(r?.date);
-      if (!k) continue;
-      const row = sanitizeRow(r);
-      if (!row) continue;
-      // sobrescribe si es nuevo o si trae mejor info
-      const ex = current.get(k);
-      if (!ex || needsUpdate(ex, row)) {
-        current.set(k, row);
-        updated++;
-      }
-    }
-    if (updated === 0) {
-      return res.status(200).json({ ok: true, updated: 0 });
+    let currentCsv = 'date,open,high,low,close\n';
+    let currentSha = undefined;
+
+    if (getRes.status === 200) {
+      const j = await getRes.json();
+      currentCsv = decoder(j.content || '');
+      currentSha = j.sha;
+    } else if (getRes.status === 404) {
+      // No existe el archivo: lo crearemos
+      currentCsv = 'date,open,high,low,close\n';
+    } else {
+      const text = await getRes.text();
+      return { statusCode: 502, headers: CORS, body: JSON.stringify({ ok:false, error:`GET CSV fallo ${getRes.status}: ${text}` }) };
     }
 
-    // 3) Re-escribir CSV
-    const newCsv = mapToCsv(current);
-    const newContent = Buffer.from(newCsv, 'utf-8').toString('base64');
+    // --- Parse CSV existente a mapa por fecha
+    const lines = currentCsv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const header = (lines[0] || '').toLowerCase();
+    const idxStart = header.startsWith('date,') ? 1 : 0; // tolera CSV sin cabecera
+    const map = new Map(); // date -> {date,open,high,low,close}
 
-    // 4) PUT commit
-    const putResp = await fetch(`${GH}/repos/${owner}/${repo}/contents/${encodeURIComponent(CSV_PATH)}`, {
+    const parseNum = (x) => {
+      const n = Number(String(x).trim().replace(',', '.'));
+      return Number.isFinite(n) ? n : NaN;
+    };
+
+    for (let i = idxStart; i < lines.length; i++) {
+      const [d, o, h, l, c] = lines[i].split(',');
+      if (!d) continue;
+      const open  = parseNum(o);
+      const high  = parseNum(h);
+      const low   = parseNum(l);
+      const close = parseNum(c);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      if (![open,high,low,close].every(Number.isFinite)) continue;
+      const hi = Math.max(high, open, close);
+      const lo = Math.min(low, open, close);
+      map.set(d, { date:d, open, high:hi, low:lo, close });
+    }
+
+    // --- Mergea nuevas filas (sobrescribe por fecha)
+    for (const r of rowsNew) map.set(r.date, r);
+
+    // --- Recompone CSV ordenado
+    const dates = Array.from(map.keys()).sort();
+    const outLines = ['date,open,high,low,close'];
+    for (const d of dates) {
+      const r = map.get(d);
+      outLines.push([
+        r.date,
+        r.open,
+        r.high,
+        r.low,
+        r.close
+      ].join(','));
+    }
+    const newCsv = outLines.join('\n') + '\n';
+
+    // --- PUT a GitHub (commit)
+    const putBody = {
+      message: `update-csv: merge ${rowsNew.length} row(s) into ${CSV_PATH}`,
+      content: encoder(newCsv),
+      branch: CSV_BRANCH,
+    };
+    if (currentSha) putBody.sha = currentSha;
+
+    const putRes = await fetch(apiBase, {
       method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'netlify-fn', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: `chore: append OHLC ${updated} rows via Netlify fn`,
-        content: newContent,
-        sha,
-        branch: GITHUB_BRANCH,
-      })
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        'User-Agent': 'klevergold-bot',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(putBody),
     });
-    if (!putResp.ok) {
-      const t = await putResp.text();
-      return res.status(500).json({ error: 'PUT content failed', detail: t });
+
+    if (!putRes.ok) {
+      const txt = await putRes.text();
+      return { statusCode: 502, headers: CORS, body: JSON.stringify({ ok:false, error:`PUT CSV fallo ${putRes.status}: ${txt}` }) };
     }
-    return res.status(200).json({ ok: true, updated });
+
+    const lastDate = dates[dates.length - 1] || null;
+    return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok:true, path: CSV_PATH, branch: CSV_BRANCH, added: rowsNew.length, lastDate }) };
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    return { statusCode: 500, headers: CORS, body: JSON.stringify({ ok:false, error: String(e?.message || e) }) };
   }
-}
-
-async function readJson(req) {
-  try {
-    const txt = await getRawBody(req);
-    return JSON.parse(txt);
-  } catch { return []; }
-}
-function getRawBody(req){ return new Promise((resolve)=>{ let b=''; req.on('data',c=>b+=c); req.on('end',()=>resolve(b)); }); }
-
-function toISO(d){
-  try { const dt = (d instanceof Date) ? d : new Date(d); return dt.toISOString().slice(0,10); } catch { return null; }
-}
-function sanitizeRow(r){
-  const k = toISO(r?.date); if(!k) return null;
-  const open  = num(r.open), high=num(r.high), low=num(r.low), close=num(r.close);
-  if (![open,high,low,close].every(Number.isFinite)) return null;
-  return { date:k, open, high, low, close };
-}
-function num(x){ const n=Number(x); return Number.isFinite(n)? n : NaN; }
-
-function csvToMap(text){
-  const m = new Map(); // key=date -> row
-  const lines = text.trim().split(/\r?\n/);
-  const header = lines.shift();
-  for (const line of lines) {
-    const [date, open, high, low, close] = line.split(',');
-    const r = sanitizeRow({ date, open, high, low, close });
-    if (r) m.set(r.date, r);
-  }
-  return m;
-}
-function mapToCsv(m){
-  const rows = Array.from(m.values()).sort((a,b)=> a.date.localeCompare(b.date));
-  const lines = ['date,open,high,low,close', ...rows.map(r => `${r.date},${r.open},${r.high},${r.low},${r.close}`)];
-  return lines.join('\n') + '\n';
-}
-function needsUpdate(ex, row){
-  // sobrescribe si el nuevo tiene valores válidos donde el anterior no, o si difiere
-  return (!isFinite(ex.open) || !isFinite(ex.high) || !isFinite(ex.low) || !isFinite(ex.close)) ||
-         (ex.open!==row.open || ex.high!==row.high || ex.low!==row.low || ex.close!==row.close);
-}
+};

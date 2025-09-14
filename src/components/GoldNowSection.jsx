@@ -1,4 +1,5 @@
-// src/components/GoldNowSection.jsx
+// @ts-check
+/* eslint-disable react-hooks/exhaustive-deps */
 'use client';
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
@@ -15,132 +16,211 @@ import {
 import { RefreshCcw } from 'lucide-react';
 import { CONFIG } from '../config.js';
 
-// ===================== SPOT via serverless =====================
 /**
- * Obtiene el último precio disponible (aprox. spot) de oro llamando a la función
- * serverless metalprices. Para cumplir las restricciones de Metals‑API, siempre
- * consulta el día de ayer, no la fecha actual.
+ * Widget “Últimos datos del oro”
+ *
+ * Este componente muestra el último precio del oro, la variación diaria y
+ * calcula el CAGR histórico desde 1971. Utiliza las filas ya cargadas del CSV
+ * (prop `rows`) y, si es necesario, rellena los huecos hasta ayer usando
+ * `fetchMissingDaysSequential`. También obtiene el precio spot más reciente
+ * a través de la API de metales configurada en `CONFIG`.
  */
-async function fetchSpotLatestRobust() {
-  const SYM = CONFIG.SYMBOL || 'XAUUSD';
-  // Calcular fecha de ayer en formato ISO (YYYY-MM-DD)
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - 1);
-  const isoDate = d.toISOString().slice(0, 10);
-  // Construir URL hacia la función metalprices
-  const url = new URL('/.netlify/functions/metalprices', window.location.origin);
-  url.searchParams.set('from', isoDate);
-  url.searchParams.set('to', isoDate);
-  url.searchParams.set('symbol', SYM);
-  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
-  const data = await res.json().catch(() => null);
-  // Comprobar validez de la respuesta
-  if (!res.ok || !data || !data.ok || !Array.isArray(data.rows) || !data.rows.length) {
-    throw new Error(data?.error || 'Spot no disponible');
-  }
-  const row = data.rows[data.rows.length - 1];
-  const price = Number(row.close);
-  const ts    = new Date(row.date + 'T00:00:00Z').getTime();
-  if (!Number.isFinite(price) || price <= 0) throw new Error('Spot no válido');
-  return { price, ts };
-}
 
-// Paleta de colores del gráfico
+// Paleta de colores para la gráfica y los indicadores. Mantiene la estética original.
 const PALETTE = {
-  fill: '#C7D2FE',
-  stroke: '#818CF8',
-  up: '#10b981',
-  down: '#ef4444',
+  fill: '#C7D2FE',     // indigo‑200
+  stroke: '#818CF8',   // indigo‑400
+  accent: '#0ea5e9',   // sky‑500
+  up: '#10b981',       // emerald‑500
+  down: '#ef4444',     // rose‑500
   grid: 'rgba(0,0,0,0.06)',
 };
 
-/**
- * Componente principal que muestra la sección de “Ahora” con el precio de oro,
- * los datos históricos, las variaciones diarias y los botones de actualización.
- */
-export default function GoldNowSection({
-  rows = [],
-  onAppendRows,
-  fetchMissingDaysSequential, // vendrá desde el padre
-}) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
-  const [lastFetchedAt, setLastFetchedAt] = useState(null);
+/* ===================== Utilities for spot price ===================== */
 
+/**
+ * Helper to fetch JSON and throw on non‑OK responses.
+ * @param {string} url
+ */
+async function httpJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/**
+ * Convert a value to a finite number or NaN.
+ * @param {any} x
+ */
+function toNumber(x) {
+  const v = Number(x);
+  return Number.isFinite(v) ? v : NaN;
+}
+
+/**
+ * Deduces the price of one ounce of gold in USD from various API response
+ * shapes. Some providers return the inverse (XAU per USD) or nested objects.
+ * @param {any} j
+ */
+function deriveUSDperXAU(j) {
+  let price = NaN;
+  let ts = Date.now();
+  // MetalsAPI: { success: true, base: 'USD', rates: { XAU: 0.00027 } }
+  if (j && typeof j === 'object' && j.rates) {
+    // XAUUSD directo
+    if (toNumber(j.rates.XAUUSD)) price = toNumber(j.rates.XAUUSD);
+    // USDXAU inverso
+    else if (toNumber(j.rates.USDXAU)) price = 1 / toNumber(j.rates.USDXAU);
+    else {
+      const base = j.base || j.source || '';
+      const rXAU = toNumber(j.rates.XAU);
+      const rUSD = toNumber(j.rates.USD);
+      if (base === 'USD' && Number.isFinite(rXAU)) price = 1 / rXAU;
+      else if (base === 'XAU' && Number.isFinite(rUSD)) price = rUSD;
+      else if (Number.isFinite(rUSD) && Number.isFinite(rXAU)) price = rUSD / rXAU;
+    }
+  }
+  // currencylayer: { quotes: { XAUUSD: ..., USDXAU: ... } }
+  else if (j && typeof j === 'object' && j.quotes) {
+    if (toNumber(j.quotes.XAUUSD)) price = toNumber(j.quotes.XAUUSD);
+    else if (toNumber(j.quotes.USDXAU)) price = 1 / toNumber(j.quotes.USDXAU);
+  }
+  // simple shape: { rate } o { price }
+  else if (Number.isFinite(toNumber(j?.rate))) {
+    price = toNumber(j.rate);
+  } else if (Number.isFinite(toNumber(j?.price))) {
+    price = toNumber(j.price);
+  } else if (j && typeof j === 'object' && j.data) {
+    // variantes: { data: { XAUUSD: { price: ... } } }
+    if (Number.isFinite(toNumber(j.data.XAUUSD))) price = toNumber(j.data.XAUUSD);
+    else if (Number.isFinite(toNumber(j.data.price))) price = toNumber(j.data.price);
+  }
+  // timestamp
+  if (j && typeof j === 'object') {
+    if (Number.isFinite(j.timestamp)) ts = Number(j.timestamp) * 1000;
+    else if (j.date) {
+      const d = Date.parse(j.date);
+      if (!Number.isNaN(d)) ts = d;
+    }
+  }
+  // Heurística: si el valor es pequeño, probablemente está invertido (p.ej. 0.00027 XAU/USD)
+  if (Number.isFinite(price) && price > 0 && price < 10) price = 1 / price;
+  return { price: Number.isFinite(price) && price > 0 ? price : NaN, ts };
+}
+
+/**
+ * Intenta obtener el precio spot más reciente de oro (USD por XAU) utilizando
+ * diferentes variantes del endpoint `latest` de Metals‑API u otros proveedores
+ * compatibles. Usa la clave de API y base definidos en CONFIG.
+ */
+async function fetchSpotLatestRobust() {
+  if (!CONFIG.API_KEY) throw new Error('Falta API key');
+  const sym = CONFIG.SYMBOL || 'XAUUSD';
+  // Algunos proveedores usan `symbol` y otros `symbols`. Probamos varias variantes.
+  const candidates = [
+    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=${sym}`),
+    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=${sym}`),
+    // MetalsAPI clásico: base USD, símbolo XAU devuelve XAU por USD (hay que invertir)
+    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&base=USD&symbols=XAU`),
+    // Algunas variantes minimalistas
+    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=XAU`),
+    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=XAU`),
+  ];
+  let lastErr = null;
+  for (const u of candidates) {
+    try {
+      const json = await httpJSON(u.toString());
+      const { price, ts } = deriveUSDperXAU(json);
+      if (Number.isFinite(price)) return { price, ts };
+      lastErr = new Error('Spot sin precio válido');
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Spot no disponible');
+}
+
+/* ===================== Componente GoldNowSection ===================== */
+
+export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDaysSequential }) {
+  // Estado de carga y error para llamadas a Metals API
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [lastFetchedAt, setLastFetchedAt] = useState(null);
+  // Estado para el precio spot
   const [spot, setSpot] = useState(null);
   const [spotTs, setSpotTs] = useState(null);
   const [spotErr, setSpotErr] = useState('');
 
-  // Formatea un Date a ISO (YYYY-MM-DD)
-  const iso = d => d.toISOString().slice(0, 10);
+  // Formatea un Date a ISO (YYYY‑MM‑DD)
+  const iso = useCallback((d) => d.toISOString().slice(0, 10), []);
+  // Hoy a medianoche UTC
   const today = useMemo(() => new Date(new Date().toISOString().slice(0, 10)), []);
+  // Ayer a medianoche UTC
   const yesterday = useMemo(() => {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - 1);
     return d;
   }, [today]);
 
-  // Ordenar las filas por fecha ascendente
-  const ordered = useMemo(() => (rows || []).slice().sort((a,b) => +a.date - +b.date), [rows]);
+  // Ordenar las filas entrantes por fecha ascendente
+  const ordered = useMemo(() => (rows || []).slice().sort((a, b) => +a.date - +b.date), [rows]);
   const lastCsvDate = ordered.length ? ordered[ordered.length - 1].date : null;
-  const lastClose   = ordered.length ? ordered[ordered.length - 1].close : null;
-  const prevClose   = ordered.length > 1 ? ordered[ordered.length - 2].close : null;
+  const lastClose = ordered.length ? ordered[ordered.length - 1].close : null;
+  const prevClose = ordered.length > 1 ? ordered[ordered.length - 2].close : null;
   const lastDateIso = lastCsvDate ? iso(lastCsvDate) : null;
 
-  // Datos para el mini gráfico de la derecha (últimos 60 días)
+  // Datos para el mini gráfico (últimos 60 días)
   const sparkData = useMemo(
-    () => ordered.slice(-60).map(r => ({ t: iso(r.date), v: r.close })),
-    [ordered]
+    () => ordered.slice(-60).map((r) => ({ t: iso(r.date), v: r.close })),
+    [ordered, iso],
   );
 
-  // ===== Helpers para CAGRs =====
-  const yearsBetween = (a,b) => Math.max(0.0001, (b - a) / (365.25 * 24 * 3600 * 1000));
-  const firstRowOnOrAfter = d => ordered.find(r => +r.date >= +d);
+  // Helpers para CAGR
+  const yearsBetween = useCallback((a, b) => Math.max(0.0001, (b - a) / (365.25 * 24 * 3600 * 1000)), []);
+  const firstRowOnOrAfter = useCallback((d) => ordered.find((r) => +r.date >= +d), [ordered]);
 
-  const { cagrAdmin, cagrMarket } = useMemo(() => {
-    const endPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : NaN;
-    const endDate  = Number.isFinite(spot) && spotTs
-      ? spotTs
-      : ordered.length
-        ? ordered[ordered.length - 1].date
-        : today;
-    if (!Number.isFinite(endPrice)) return { cagrAdmin: null, cagrMarket: null };
-
+  // Calcular CAGRs (Admin y Market). Usa el spot si está disponible como precio y fecha final.
+  const cagrInfo = useMemo(() => {
+    if (!ordered.length) return { cagrAdmin: null, cagrMarket: null };
+    const endPrice = Number.isFinite(spot) ? spot : lastClose;
+    const endDate = Number.isFinite(spot) && spotTs instanceof Date ? spotTs : lastCsvDate;
+    if (!Number.isFinite(endPrice) || !endDate) return { cagrAdmin: null, cagrMarket: null };
+    // Paridad administrada: 1971‑08‑15, Pini=35 USD/oz
     const BASE_ADMIN_DATE = new Date(Date.UTC(1971, 7, 15));
+    const P_ADMIN = 35;
     const nAdmin = yearsBetween(BASE_ADMIN_DATE, endDate);
-    const cagrAdmin = Math.pow(endPrice / 35, 1/nAdmin) - 1;
-
+    const cagrAdmin = Math.pow(endPrice / Math.max(P_ADMIN, 1e-9), 1 / nAdmin) - 1;
+    // Mercado libre: 1971‑08‑16, Pini = primer cierre >= esa fecha o fallback 43.40
     const BASE_MKT_DATE = new Date(Date.UTC(1971, 7, 16));
     const baseRow = firstRowOnOrAfter(BASE_MKT_DATE);
     const P_MARKET = Number.isFinite(baseRow?.close) ? baseRow.close : 43.40;
     const baseDateUsed = baseRow?.date || BASE_MKT_DATE;
     const nMarket = yearsBetween(baseDateUsed, endDate);
-    const cagrMarket = Math.pow(endPrice / Math.max(P_MARKET,1e-9), 1/nMarket) - 1;
-
+    const cagrMarket = Math.pow(endPrice / Math.max(P_MARKET, 1e-9), 1 / nMarket) - 1;
     return { cagrAdmin, cagrMarket };
-  }, [ordered, spot, spotTs, today]);
+  }, [ordered, spot, spotTs, lastClose, lastCsvDate, yearsBetween, firstRowOnOrAfter]);
 
-  /**
-   * Calcula qué días faltan entre la última fecha del CSV y ayer. Devuelve un
-   * array de cadenas ISO (YYYY-MM-DD). Si no falta ningún día, devuelve [].
-   */
+  // Determinar qué días faltan entre la última fecha del CSV y AYER (no hoy)
   const gapsToYesterday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
-    for (let d = new Date(new Date(lastCsvDate).getTime() + 86400000);
-         d <= yesterday;
-         d = new Date(d.getTime() + 86400000)) {
+    for (
+      let d = new Date(lastCsvDate.getTime() + 86400000);
+      d <= yesterday;
+      d = new Date(d.getTime() + 86400000)
+    ) {
       days.push(iso(d));
     }
     return days;
-  }, [lastCsvDate, yesterday]);
+  }, [lastCsvDate, yesterday, iso]);
 
-  // Flag para saber si podemos pedir filas nuevas
+  // Puede el padre pedir los días faltantes
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
   /**
-   * Refresca el spot consultando la función serverless. Si hay error,
-   * actualiza el estado spotErr.
+   * Pide el precio spot a Metals API usando la función robusta. Actualiza
+   * `spot`, `spotTs` y `spotErr` según corresponda.
    */
   const refreshSpot = useCallback(async () => {
     try {
@@ -149,22 +229,28 @@ export default function GoldNowSection({
       setSpotTs(new Date(ts));
       setSpotErr('');
     } catch (e) {
+      setSpot(null);
+      setSpotTs(null);
       setSpotErr(String(e?.message || e));
     }
   }, []);
 
   /**
-   * Maneja el clic en “Actualizar ahora”. Actualiza el spot y, si faltan días
-   * en el CSV, los pide mediante fetchMissingDaysSequential() y los añade.
+   * Acciona la actualización manual: refresca el spot e intenta
+   * rellenar los huecos hasta AYER. Marca la hora de la actualización.
    */
   const updateNow = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
+      // Siempre intenta obtener el spot antes de rellenar huecos
       await refreshSpot();
+      // Si hay días faltantes y el padre nos permite pedirlos
       if (canFetch && gapsToYesterday.length) {
         const rowsNew = await fetchMissingDaysSequential(gapsToYesterday);
-        if (rowsNew?.length && typeof onAppendRows === 'function') onAppendRows(rowsNew);
+        if (rowsNew?.length && typeof onAppendRows === 'function') {
+          onAppendRows(rowsNew);
+        }
       }
       setLastFetchedAt(new Date());
     } catch (e) {
@@ -174,92 +260,186 @@ export default function GoldNowSection({
     }
   }, [refreshSpot, canFetch, gapsToYesterday, onAppendRows]);
 
-  // Al montar el componente, solicitar datos al instante
-  useEffect(() => { updateNow(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // Refrescar sólo el spot cada minuto
+  // Al montar el componente: refrescar spot y rellenar huecos si procede
   useEffect(() => {
-    const id = setInterval(refreshSpot, 60_000);
+    updateNow();
+  }, []);
+
+  // Polling para refrescar sólo el spot cada 60 segundos
+  useEffect(() => {
+    const id = setInterval(() => {
+      refreshSpot();
+    }, 60_000);
     return () => clearInterval(id);
   }, [refreshSpot]);
 
-  // Datos derivados para la UI
+  // Precio a mostrar: primero spot, luego último cierre disponible
   const displayPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : null;
+  // Diferencias diarias basadas en cierres del CSV
   const delta = Number.isFinite(lastClose) && Number.isFinite(prevClose) ? lastClose - prevClose : null;
-  const deltaPct = Number.isFinite(lastClose) && Number.isFinite(prevClose) && prevClose !== 0
-    ? lastClose/prevClose - 1
-    : null;
+  const deltaPct =
+    Number.isFinite(lastClose) && Number.isFinite(prevClose) && prevClose !== 0
+      ? lastClose / prevClose - 1
+      : null;
 
   return (
-    <div className="border rounded-lg p-4">
-      {/* Encabezado con botón de refresco */}
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-semibold">Últimos datos del oro</h2>
+    <section className="rounded-3xl border border-black/5 bg-white shadow-[0_10px_24px_rgba(0,0,0,0.05)] p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-semibold">Últimos datos del oro</div>
         <button
           onClick={updateNow}
-          className="flex items-center px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
           disabled={loading}
+          className="inline-flex items-center gap-2 text-xs rounded-md border px-2 py-1 disabled:opacity-60"
         >
-          <RefreshCcw className="w-4 h-4 mr-1" />
+          <RefreshCcw className="w-3.5 h-3.5" />{' '}
           {loading ? 'Actualizando…' : 'Actualizar ahora'}
         </button>
       </div>
 
-      {/* Sección principal: precio y variaciones */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-2xl font-bold">
-            {Number.isFinite(displayPrice)
-              ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 })
-              : '—'}
-          </div>
-          {Number.isFinite(delta) && (
-            <div className={`text-sm ${delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {delta >= 0 ? '+' : ''}{delta.toFixed(2)} ({(deltaPct * 100).toFixed(2)}%)
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="md:col-span-2">
+          <div className="flex items-end gap-3">
+            <div className="text-3xl font-bold tracking-tight">
+              {Number.isFinite(displayPrice)
+                ? displayPrice.toLocaleString('es-ES', { maximumFractionDigits: 2 })
+                : '—'}
             </div>
-          )}
-          {spotErr && <div className="text-sm text-rose-600">{spotErr}</div>}
+            {Number.isFinite(delta) && (
+              <span className={`text-sm font-medium ${delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {delta >= 0 ? '+' : ''}
+                {delta.toFixed(2)} ({deltaPct >= 0 ? '+' : ''}
+                {(deltaPct * 100).toFixed(2)}%)
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-1">
+            {`Hoy ${iso(today)}`}
+            {lastDateIso ? ` · último cierre CSV: ${lastDateIso}` : ''}
+            {spotTs instanceof Date ? ` · spot ${spotTs.toLocaleTimeString()}` : ''}
+            {lastFetchedAt ? ` · OHLC actualizado ${lastFetchedAt.toLocaleTimeString()}` : ''}
+            {!canFetch && (
+              <span className="ml-2 text-amber-700">(API no disponible en este entorno)</span>
+            )}
+            {spotErr && (
+              <span className="ml-2 text-amber-700">(Spot: {spotErr})</span>
+            )}
+          </div>
         </div>
-        <div className="mt-4 sm:mt-0">
-          {/* Mini gráfico de los últimos 60 días */}
-          <ResponsiveContainer width={200} height={80}>
-            <AreaChart data={sparkData}>
-              <CartesianGrid stroke={PALETTE.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="t" hide />
-              <YAxis domain={['dataMin', 'dataMax']} hide />
-              <Area
-                type="monotone"
-                dataKey="v"
-                stroke={PALETTE.stroke}
-                fill={PALETTE.fill}
-                fillOpacity={0.4}
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+
+        {/* Chips de CAGR con efecto "glass" */}
+        <div className="flex items-start justify-end gap-2">
+          <GlassChip
+            label="CAGR 1971 (35 USD)"
+            value={
+              cagrInfo.cagrAdmin != null
+                ? `${(cagrInfo.cagrAdmin * 100).toFixed(2)}%`
+                : '—'
+            }
+            tone={
+              cagrInfo.cagrAdmin != null
+                ? cagrInfo.cagrAdmin >= 0
+                  ? 'pos'
+                  : 'neg'
+                : 'neutral'
+            }
+          />
+          <GlassChip
+            label="CAGR 1971 (1er cierre)"
+            value={
+              cagrInfo.cagrMarket != null
+                ? `${(cagrInfo.cagrMarket * 100).toFixed(2)}%`
+                : '—'
+            }
+            tone={
+              cagrInfo.cagrMarket != null
+                ? cagrInfo.cagrMarket >= 0
+                  ? 'pos'
+                  : 'neg'
+                : 'neutral'
+            }
+          />
         </div>
       </div>
 
-      {/* Sección de CAGRs */}
-      <div className="mt-4 flex space-x-4">
-        <div>
-          <div className="text-sm text-gray-500">CAGR Admin (desde 1971-08-15)</div>
-          <div className="text-lg font-medium">
-            {Number.isFinite(cagrAdmin) ? (cagrAdmin * 100).toFixed(2) + '%' : '—'}
-          </div>
-        </div>
-        <div>
-          <div className="text-sm text-gray-500">CAGR Market (desde 1971-08-16)</div>
-          <div className="text-lg font-medium">
-            {Number.isFinite(cagrMarket) ? (cagrMarket * 100).toFixed(2) + '%' : '—'}
-          </div>
-        </div>
-        {lastFetchedAt && (
-          <div className="text-sm text-gray-500">Actualizado: {lastFetchedAt.toLocaleString('es-ES')}</div>
-        )}
+      {/* Sparkline de los últimos 60 días */}
+      <div className="mt-4 h-[160px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={sparkData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 6" stroke={PALETTE.grid} />
+            <XAxis
+              dataKey="t"
+              tick={{ fill: '#111', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={32}
+            />
+            <YAxis
+              tick={{ fill: '#111', fontSize: 11 }}
+              tickLine={false}
+              axisLine={false}
+              width={44}
+            />
+            <ReferenceLine y={0} stroke="#111" opacity={0.1} />
+            <RTooltip cursor={false} content={<SparkGlassTooltip />} />
+            <Area
+              type="monotone"
+              dataKey="v"
+              stroke={PALETTE.stroke}
+              strokeWidth={1.6}
+              fill={PALETTE.fill + '66'}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
       </div>
 
-      {/* Mostrar errores generales (distintos de spotErr) */}
-      {error && <div className="mt-2 text-sm text-rose-600">{error}</div>}
+      {error && <div className="mt-2 text-xs text-rose-700">{error}</div>}
+    </section>
+  );
+}
+
+/* ============ UI helper components ============ */
+
+/**
+ * Un chip con efecto glass para mostrar valores como el CAGR. Cambia de color
+ * según el tono (positivo, negativo o neutro).
+ */
+function GlassChip({ label, value, tone = 'neutral' }) {
+  const toneCls =
+    tone === 'pos'
+      ? 'text-emerald-700'
+      : tone === 'neg'
+      ? 'text-rose-700'
+      : 'text-gray-900/90';
+  return (
+    <div
+      className={`relative rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.6)] px-3 py-2 ${toneCls}`}
+      style={{ backdropFilter: 'blur(12px) saturate(170%)', WebkitBackdropFilter: 'blur(12px) saturate(170%)' }}
+    >
+      <div className="font-medium">{value}</div>
+      <div className="text-[10px] text-gray-600">{label}</div>
+      <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
+    </div>
+  );
+}
+
+/**
+ * Tooltip personalizado para la sparkline. Usa efecto glass y muestra fecha y valor.
+ */
+function SparkGlassTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const v = payload[0]?.value;
+  return (
+    <div
+      className="relative min-w-[160px] rounded-2xl border border-white/30 bg-white/10 text-xs overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.15),inset_0_1px_0_rgba(255,255,255,0.6)]"
+      style={{ backdropFilter: 'blur(14px) saturate(170%)', WebkitBackdropFilter: 'blur(14px) saturate(170%)' }}
+    >
+      <div className="p-2">
+        <div className="font-medium text-gray-900/90">{label}</div>
+        <div className="text-right font-semibold text-gray-900/90">
+          {Number.isFinite(v) ? Number(v).toLocaleString('es-ES') : '—'}
+        </div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 ring-1 ring-white/30 rounded-2xl" />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 // netlify/functions/update-csv.js
-// Serverless para MERGEAR nuevas filas OHLC en un CSV del repo (GitHub Contents API)
+// Mergea nuevas filas OHLC en el CSV del repo (GitHub Contents API),
+// preservando si el CSV trae columna "symbol".
 
 const encoder = (s) => Buffer.from(s, "utf8").toString("base64");
 const decoder = (b64) => Buffer.from(b64, "base64").toString("utf8");
@@ -19,17 +20,19 @@ exports.handler = async (event) => {
       return { statusCode: 405, headers: CORS, body: "Method Not Allowed" };
     }
 
+    // ENV
     const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
     const REPO_OWNER   = process.env.REPO_OWNER   || "cancoretamero";
     const REPO_NAME    = process.env.REPO_NAME    || "KleverGold";
     const CSV_PATH     = process.env.CSV_PATH     || "public/data/xauusd_ohlc_clean.csv";
     const CSV_BRANCH   = process.env.CSV_BRANCH   || "main";
+    const CSV_SYMBOL   = (process.env.CSV_SYMBOL || "XAUUSD").toUpperCase();
 
     if (!GITHUB_TOKEN) {
       return { statusCode: 500, headers: CORS, body: JSON.stringify({ ok:false, error:"Falta GITHUB_TOKEN en variables de entorno" }) };
     }
 
-    // Body esperado: [{ date:'YYYY-MM-DD', open, high, low, close }, ...]
+    // Body esperado: [{ date:'YYYY-MM-DD', open, high, low, close, (opcional) symbol }, ...]
     let rowsNew = [];
     try {
       rowsNew = JSON.parse(event.body || "[]");
@@ -40,6 +43,7 @@ exports.handler = async (event) => {
 
     const norm = (r) => {
       const d = String(r.date || "").slice(0,10);
+      const s = (r.symbol ? String(r.symbol) : CSV_SYMBOL).toUpperCase();
       const open  = Number(r.open);
       const high  = Number(r.high);
       const low   = Number(r.low);
@@ -48,7 +52,7 @@ exports.handler = async (event) => {
       if (![open,high,low,close].every(Number.isFinite)) return null;
       const hi = Math.max(high, open, close);
       const lo = Math.min(low, open, close);
-      return { date:d, open, high:hi, low:lo, close };
+      return { date:d, symbol:s, open, high:hi, low:lo, close };
     };
     rowsNew = rowsNew.map(norm).filter(Boolean);
     if (!rowsNew.length) {
@@ -61,52 +65,85 @@ exports.handler = async (event) => {
       headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "User-Agent": "klevergold-bot" }
     });
 
-    let currentCsv = "date,open,high,low,close\n";
+    let currentCsv = "";
     let currentSha = undefined;
 
     if (getRes.status === 200) {
       const j = await getRes.json();
       currentCsv = decoder(j.content || "");
       currentSha = j.sha;
-    } else if (getRes.status !== 404) {
+    } else if (getRes.status === 404) {
+      // nuevo archivo
+      currentCsv = ""; // definimos header luego según si hay 'symbol'
+    } else {
       const text = await getRes.text();
       return { statusCode: 502, headers: CORS, body: JSON.stringify({ ok:false, error:`GET CSV fallo ${getRes.status}: ${text}` }) };
     }
 
-    // Parse CSV actual a mapa
-    const lines = currentCsv.split(/\r?\n/).map(s => s.trim());
-    const header = (lines[0] || "").toLowerCase();
-    const idxStart = header.startsWith("date,") ? 1 : 0;
-    const map = new Map();
+    // Parse CSV existente
+    const map = new Map(); // date -> {date,symbol?,open,high,low,close}
+    let hasSymbol = false;
 
-    const parseNum = (x) => {
-      const n = Number(String(x).trim().replace(",", "."));
-      return Number.isFinite(n) ? n : NaN;
-    };
+    if (currentCsv.trim()) {
+      const lines = currentCsv.split(/\r?\n/).map(s => s.trim()).filter(s => s.length > 0);
+      const header = (lines[0] || "").toLowerCase().replace(/\s+/g,"");
+      const cols = header.split(",").map(c => c.trim());
+      // detectamos si hay "symbol" en cabecera:
+      hasSymbol = cols.includes("symbol");
+      const idxStart = 1;
 
-    for (let i = idxStart; i < lines.length; i++) {
-      if (!lines[i]) continue;
-      const [d, o, h, l, c] = lines[i].split(",");
-      if (!d) continue;
-      const open  = parseNum(o), high = parseNum(h), low = parseNum(l), close = parseNum(c);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
-      if (![open,high,low,close].every(Number.isFinite)) continue;
-      const hi = Math.max(high, open, close);
-      const lo = Math.min(low, open, close);
-      map.set(d, { date:d, open, high:hi, low:lo, close });
+      const parseNum = (x) => {
+        const n = Number(String(x).trim().replace(",", "."));
+        return Number.isFinite(n) ? n : NaN;
+      };
+
+      for (let i = idxStart; i < lines.length; i++) {
+        const parts = lines[i].split(",");
+        if (!parts.length) continue;
+
+        let d, s, o, h, l, c;
+
+        if (hasSymbol || parts.length >= 6) {
+          [d, s, o, h, l, c] = parts;
+        } else {
+          [d, o, h, l, c] = parts;
+          s = CSV_SYMBOL;
+        }
+
+        d = (d || "").trim();
+        s = (s || CSV_SYMBOL).toUpperCase().trim();
+        const open  = parseNum(o), high = parseNum(h), low = parseNum(l), close = parseNum(c);
+
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+        if (![open,high,low,close].every(Number.isFinite)) continue;
+        const hi = Math.max(high, open, close);
+        const lo = Math.min(low, open, close);
+        map.set(d, { date:d, symbol:s, open, high:hi, low:lo, close });
+      }
     }
 
-    // Merge nuevas filas (sobrescribe por fecha)
-    for (const r of rowsNew) map.set(r.date, r);
+    // Merge nuevas filas (sobrescribe por fecha) y guarda si había columna symbol
+    for (const r of rowsNew) {
+      map.set(r.date, hasSymbol ? r : { date:r.date, open:r.open, high:r.high, low:r.low, close:r.close, symbol: hasSymbol ? (r.symbol || CSV_SYMBOL) : undefined });
+    }
 
     // Recompone CSV ordenado
     const dates = Array.from(map.keys()).sort();
-    const outLines = ["date,open,high,low,close"];
+    const outHasSymbol = hasSymbol || true; // forzamos conservar symbol; si tu CSV no lo tenía, también lo añadimos
+    const headerLine = outHasSymbol ? "date,symbol,open,high,low,close" : "date,open,high,low,close";
+    const out = [headerLine];
+
     for (const d of dates) {
       const r = map.get(d);
-      outLines.push([r.date, r.open, r.high, r.low, r.close].join(","));
+      const sym = (r.symbol || CSV_SYMBOL).toUpperCase();
+      if (outHasSymbol) {
+        out.push([r.date, sym, r.open, r.high, r.low, r.close].join(","));
+      } else {
+        out.push([r.date, r.open, r.high, r.low, r.close].join(","));
+      }
     }
-    const newCsv = outLines.join("\n") + "\n";
+
+    const newCsv = out.join("\n") + "\n";
 
     // Commit a GitHub
     const putBody = {

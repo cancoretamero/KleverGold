@@ -1,59 +1,106 @@
-// src/api.js — usa Netlify Functions
+// src/api.js — helpers para consumir el backend Express
 
-export async function fetchMissingDaysSequential(dates, symbol = "XAUUSD") {
+import { CONFIG } from './config.js';
+
+const BACKEND_BASE = CONFIG.BACKEND_BASE || '';
+
+const backendBaseUrl = (() => {
+  if (!BACKEND_BASE) return null;
+  try {
+    const normalized = BACKEND_BASE.endsWith('/') ? BACKEND_BASE : `${BACKEND_BASE}/`;
+    return new URL(normalized);
+  } catch (e) {
+    console.warn('VITE_BACKEND_BASE inválido, usando mismo origen', e);
+    return null;
+  }
+})();
+
+const withBase = (path) => {
+  const relative = path.startsWith('/') ? path.slice(1) : path;
+  if (!backendBaseUrl) return relative ? `/${relative}` : '/';
+  return new URL(relative, backendBaseUrl).toString();
+};
+
+export async function fetchMissingDaysSequential(dates = []) {
   const sorted = Array.from(new Set(dates)).sort();
   const chunks = packIntoRanges(sorted);
   const all = [];
   for (const [from, to] of chunks) {
-    const rows = await getRangeFromServer(from, to, symbol);
+    const rows = await getRangeFromServer(from, to);
     all.push(...rows);
   }
   return dedupeByDate(all);
 }
 
-export async function fetchMissingDaysOptimized(dates, symbol = "XAUUSD") {
+export async function fetchMissingDaysOptimized(dates = []) {
   const sorted = Array.from(new Set(dates)).sort();
   const chunks = packIntoRanges(sorted);
-  const parts = await Promise.all(chunks.map(([from, to]) => getRangeFromServer(from, to, symbol)));
+  const parts = await Promise.all(chunks.map(([from, to]) => getRangeFromServer(from, to)));
   return dedupeByDate(parts.flat());
 }
 
-export async function persistRowsToRepo(rows, symbol = "XAUUSD") {
-  if (!rows || !rows.length) return { ok:true, added:0 };
-  const res = await fetch("/.netlify/functions/update-csv", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(rows.map(r => ({
-      date: (r.date instanceof Date ? r.date : new Date(r.date)).toISOString().slice(0,10),
-      symbol,
-      open: num(r.open), high: num(r.high), low: num(r.low), close: num(r.close)
-    }))),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(()=>"");
-    throw new Error("update-csv fallo: " + res.status + " " + text);
+export async function persistRowsToRepo(rows = []) {
+  if (!rows.length) return { ok: true, updated: 0 };
+  const payload = rows
+    .map((r) => ({
+      date: toIso(r.date),
+      open: num(r.open),
+      high: num(r.high),
+      low: num(r.low),
+      close: num(r.close),
+    }))
+    .filter((r) => r.date && [r.open, r.high, r.low, r.close].every(Number.isFinite));
+
+  if (!payload.length) {
+    throw new Error('Sin filas válidas para guardar');
   }
-  return await res.json();
+
+  const res = await fetch(withBase('/api/update-csv'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json) {
+    const msg = json?.error || `HTTP ${res.status}`;
+    throw new Error(`update-csv fallo: ${msg}`);
+  }
+  return json;
 }
 
-export async function getCsvInfo() {
-  const res = await fetch("/.netlify/functions/csv-info");
-  const j = await res.json().catch(() => null);
-  if (!res.ok || !j || !j.ok) throw new Error("csv-info fallo: " + (j?.error || res.status));
-  return j;
+export async function fetchSpotPrice() {
+  const res = await fetch(withBase('/api/spot'), {
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) {
+    const msg = json?.detail || json?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  const price = num(json.price);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('Precio inválido');
+  const tsValue = Number(json.ts);
+  const ts = Number.isFinite(tsValue) ? new Date(tsValue) : new Date();
+  return { price, ts };
 }
 
 // ===== Helpers =====
 function packIntoRanges(dates) {
   if (!dates.length) return [];
-  const toDate = s => new Date(s + "T00:00:00Z");
-  const addDay = d => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + 1); return x; };
-  const fmt = d => d.toISOString().slice(0,10);
+  const toDate = (s) => new Date(`${s}T00:00:00Z`);
+  const addDay = (d) => {
+    const x = new Date(d);
+    x.setUTCDate(x.getUTCDate() + 1);
+    return x;
+  };
+  const fmt = (d) => d.toISOString().slice(0, 10);
 
   const ranges = [];
   let start = toDate(dates[0]);
   let prev = toDate(dates[0]);
-  for (let i=1; i<dates.length; i++) {
+  for (let i = 1; i < dates.length; i += 1) {
     const cur = toDate(dates[i]);
     if (+cur - +addDay(prev) > 0) {
       ranges.push([fmt(start), fmt(prev)]);
@@ -65,35 +112,56 @@ function packIntoRanges(dates) {
   return ranges;
 }
 
-async function getRangeFromServer(from, to, symbol) {
-  const url = new URL("/.netlify/functions/metalprices", window.location.origin);
-  url.searchParams.set("from", from);
-  url.searchParams.set("to", to);
-  url.searchParams.set("symbol", symbol);
-  const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
-  const j = await res.json().catch(() => null);
-  if (!res.ok || !j || !j.ok) {
-    throw new Error("metalprices proxy fallo: " + (j?.error || res.status));
-  }
-  return (j.rows || []).map(r => {
-    const d = new Date(String(r.date).slice(0,10) + "T00:00:00Z");
-    const open  = num(r.open), high = num(r.high), low = num(r.low), close = num(r.close);
-    return {
-      date: d, open, high, low, close,
-      range: Math.abs(high - low),
-      year: d.getUTCFullYear(),
-      month: d.getUTCMonth() + 1,
-    };
+async function getRangeFromServer(from, to) {
+  const qs = new URLSearchParams({ from, to });
+  const res = await fetch(`${withBase('/api/historical')}?${qs.toString()}`, {
+    headers: { Accept: 'application/json' },
   });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) {
+    const msg = json?.detail || json?.error || `HTTP ${res.status}`;
+    throw new Error(`historical fallo: ${msg}`);
+  }
+  return (json.rows || [])
+    .map((r) => {
+      const d = new Date(`${String(r.date).slice(0, 10)}T00:00:00Z`);
+      const open = num(r.open);
+      const high = num(r.high);
+      const low = num(r.low);
+      const close = num(r.close);
+      if (![open, high, low, close].every(Number.isFinite)) return null;
+      return {
+        date: d,
+        open,
+        high,
+        low,
+        close,
+        range: Math.abs(high - low),
+        year: d.getUTCFullYear(),
+        month: d.getUTCMonth() + 1,
+      };
+    })
+    .filter(Boolean);
 }
 
 function dedupeByDate(rows) {
   const m = new Map();
   for (const r of rows) {
-    const k = (r.date instanceof Date) ? r.date.toISOString().slice(0,10) : String(r.date).slice(0,10);
+    const k = r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10);
     m.set(k, r);
   }
-  return Array.from(m.values()).sort((a,b) => +a.date - +b.date);
+  return Array.from(m.values()).sort((a, b) => +a.date - +b.date);
 }
 
-function num(x){ const n = Number(String(x ?? "").replace(",", ".")); return Number.isFinite(n) ? n : NaN; }
+function toIso(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const str = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : null;
+}
+
+function num(x) {
+  const s = String(x ?? '').trim();
+  if (!s) return NaN;
+  const n = Number(s.replace(',', '.'));
+  return Number.isFinite(n) ? n : NaN;
+}

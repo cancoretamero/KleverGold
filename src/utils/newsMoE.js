@@ -104,11 +104,35 @@ const DEFAULT_HEADS = {
 let extractorPromise = null;
 let expertsPromise = null;
 let weightsPromise = null;
+let transformersModulePromise = null;
+
+const TRANSFORMERS_CDN_URL = 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.9.0/dist/transformers.min.js';
+
+async function loadTransformersModule() {
+  if (!transformersModulePromise) {
+    transformersModulePromise = (async () => {
+      try {
+        return await import('@xenova/transformers');
+      } catch (error) {
+        if (typeof window === 'undefined') throw error;
+        const fallbackUrl = window?.KLEVER_TRANSFORMERS_CDN || TRANSFORMERS_CDN_URL;
+        try {
+          console.warn('[GoldNews] No se pudo resolver @xenova/transformers, usando CDN', error);
+          return await import(/* @vite-ignore */ fallbackUrl);
+        } catch (cdnError) {
+          console.error('[GoldNews] Fallback CDN de transformers también falló', cdnError);
+          throw error;
+        }
+      }
+    })();
+  }
+  return transformersModulePromise;
+}
 
 async function loadExtractor() {
   if (!extractorPromise) {
     extractorPromise = (async () => {
-      const mod = await import('@xenova/transformers');
+      const mod = await loadTransformersModule();
       mod.env.allowLocalModels = false;
       mod.env.useBrowserCache = true;
       mod.env.backends.onnx.wasm.proxy = false;

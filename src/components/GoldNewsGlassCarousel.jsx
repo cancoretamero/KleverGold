@@ -137,7 +137,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
           <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
           <div>
             <h3 className="text-lg font-semibold tracking-tight">Últimas que mueven el oro</h3>
-            <p className="text-xs text-gray-500">IA 100% libre · Xenova all-MiniLM-L6-v2</p>
+            <p className="text-xs text-gray-500">IA 100% de Aisa Group CA · KleverOrion v.2.0</p>
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500">

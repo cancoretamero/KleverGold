@@ -3,10 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import fs from 'fs';
-import { promises as fsPromises } from 'fs';
 import path from 'path';
-import crypto from 'crypto';
-import { fileURLToPath } from 'url';
+import emailSignupRouter from './routes/emailSignup.js';
 
 // Configuración por variables de entorno
 const PORT = process.env.PORT || 8080;
@@ -15,13 +13,6 @@ const GOLDAPI_BASE = (process.env.GOLDAPI_BASE || 'https://www.goldapi.io/api').
 const SYMBOL_RAW = process.env.SYMBOL || 'XAUUSD';
 const DEFAULT_CSV_PATH = path.resolve(process.cwd(), 'public', 'data', 'xauusd_ohlc_clean.csv');
 const CSV_PATH = process.env.CSV_PATH ? path.resolve(process.env.CSV_PATH) : DEFAULT_CSV_PATH;
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SIGNUPS_DIR = path.resolve(__dirname, 'data');
-const EMAIL_SIGNUPS_PATH = path.join(SIGNUPS_DIR, 'email-signups.json');
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_PASSWORD_LENGTH = 128;
 
 const toPositiveNumber = (value, fallback) => {
   const n = Number(value);
@@ -156,100 +147,7 @@ function writeMapToCsv(map, csvPath) {
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-const readJsonSafe = async (filePath, fallback) => {
-  try {
-    const raw = await fsPromises.readFile(filePath, 'utf-8');
-    if (!raw.trim()) return fallback;
-    return JSON.parse(raw);
-  } catch (error) {
-    if (error.code === 'ENOENT') return fallback;
-    throw error;
-  }
-};
-
-const writeJsonSafe = async (filePath, data) => {
-  await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
-  const serialized = `${JSON.stringify(data, null, 2)}\n`;
-  await fsPromises.writeFile(filePath, serialized, 'utf-8');
-};
-
-app.post('/api/signup/email', async (req, res) => {
-  try {
-    const { fullName, email, password, referralCode } = req.body ?? {};
-
-    const rawName = typeof fullName === 'string' ? fullName.trim() : '';
-    if (rawName.length < 2) {
-      return res.status(400).json({ ok: false, error: 'Necesitamos tu nombre completo.' });
-    }
-    const normalizedName = rawName.replace(/\s+/g, ' ');
-
-    const rawEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
-    if (!EMAIL_REGEX.test(rawEmail)) {
-      return res.status(400).json({ ok: false, error: 'El correo electrónico no es válido.' });
-    }
-
-    const passwordValue = typeof password === 'string' ? password : '';
-    if (passwordValue.length < MIN_PASSWORD_LENGTH) {
-      return res.status(400).json({
-        ok: false,
-        error: `La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`,
-      });
-    }
-    if (passwordValue.length > MAX_PASSWORD_LENGTH) {
-      return res.status(400).json({
-        ok: false,
-        error: 'La contraseña es demasiado larga.',
-      });
-    }
-
-    const hasLetter = /[A-Za-zÁÉÍÓÚÜáéíóúüÑñ]/.test(passwordValue);
-    const hasNumber = /\d/.test(passwordValue);
-    if (!hasLetter || !hasNumber) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Usa una combinación de letras y números en tu contraseña.',
-      });
-    }
-
-    const signups = await readJsonSafe(EMAIL_SIGNUPS_PATH, []);
-    const alreadyRegistered = signups.find((entry) => entry?.email === rawEmail);
-    if (alreadyRegistered) {
-      return res.status(409).json({ ok: false, error: 'Este correo ya está registrado.' });
-    }
-
-    const passwordHash = crypto.createHash('sha256').update(passwordValue).digest('hex');
-    const sanitizedReferral = typeof referralCode === 'string' && referralCode.trim()
-      ? referralCode.trim().slice(0, 120)
-      : null;
-
-    const entry = {
-      id: crypto.randomUUID(),
-      method: 'email',
-      fullName: normalizedName,
-      email: rawEmail,
-      passwordHash,
-      referralCode: sanitizedReferral,
-      createdAt: new Date().toISOString(),
-      metadata: {
-        ip: req.ip,
-        userAgent: typeof req.headers['user-agent'] === 'string'
-          ? req.headers['user-agent'].slice(0, 200)
-          : null,
-        acceptLanguage: typeof req.headers['accept-language'] === 'string'
-          ? req.headers['accept-language'].slice(0, 120)
-          : null,
-      },
-    };
-
-    await writeJsonSafe(EMAIL_SIGNUPS_PATH, [...signups, entry]);
-
-    return res.status(201).json({ ok: true, id: entry.id });
-  } catch (error) {
-    console.error('Email signup failed', error);
-    return res.status(500).json({ ok: false, error: 'No se pudo completar el registro.' });
-  }
-});
+app.use('/api/signup', emailSignupRouter);
 
 /**
  * GET /api/spot

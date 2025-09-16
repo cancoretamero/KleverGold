@@ -81,9 +81,18 @@ export async function fetchSpotPrice() {
   }
   const price = num(json.price);
   if (!Number.isFinite(price) || price <= 0) throw new Error('Precio inválido');
+  const bid = num(json.bid);
+  const ask = num(json.ask);
   const tsValue = Number(json.ts);
   const ts = Number.isFinite(tsValue) ? new Date(tsValue) : new Date();
-  return { price, ts };
+  return {
+    price,
+    bid: Number.isFinite(bid) && bid > 0 ? bid : null,
+    ask: Number.isFinite(ask) && ask > 0 ? ask : null,
+    ts,
+    symbol: typeof json.symbol === 'string' && json.symbol ? json.symbol : null,
+    currency: typeof json.currency === 'string' && json.currency ? json.currency : null,
+  };
 }
 
 // ===== Helpers =====

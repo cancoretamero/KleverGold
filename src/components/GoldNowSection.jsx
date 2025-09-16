@@ -46,6 +46,8 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   // Estado para el precio spot
   const [spot, setSpot] = useState(null);
   const [spotTs, setSpotTs] = useState(null);
+  const [spotBid, setSpotBid] = useState(null);
+  const [spotAsk, setSpotAsk] = useState(null);
   const [spotErr, setSpotErr] = useState('');
 
   // Formatea un Date a ISO (YYYY‑MM‑DD)
@@ -120,13 +122,17 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
    */
   const refreshSpot = useCallback(async () => {
     try {
-      const { price, ts } = await fetchSpotPrice();
+      const { price, ts, bid, ask } = await fetchSpotPrice();
       setSpot(price);
       setSpotTs(ts instanceof Date ? ts : new Date(ts));
+      setSpotBid(Number.isFinite(bid) ? bid : null);
+      setSpotAsk(Number.isFinite(ask) ? ask : null);
       setSpotErr('');
     } catch (e) {
       setSpot(null);
       setSpotTs(null);
+      setSpotBid(null);
+      setSpotAsk(null);
       setSpotErr(String(e?.message || e));
     }
   }, []);
@@ -208,6 +214,26 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
               </span>
             )}
           </div>
+          {Number.isFinite(spotBid) || Number.isFinite(spotAsk) ? (
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-600">
+              {Number.isFinite(spotBid) && (
+                <span>
+                  Compra (bid):{' '}
+                  <span className="font-medium text-gray-700">
+                    {spotBid.toLocaleString('es-ES', { maximumFractionDigits: 2 })}
+                  </span>
+                </span>
+              )}
+              {Number.isFinite(spotAsk) && (
+                <span>
+                  Venta (ask):{' '}
+                  <span className="font-medium text-gray-700">
+                    {spotAsk.toLocaleString('es-ES', { maximumFractionDigits: 2 })}
+                  </span>
+                </span>
+              )}
+            </div>
+          ) : null}
           <div className="text-[11px] text-gray-500 mt-1">
             {`Hoy ${iso(today)}`}
             {lastDateIso ? ` · último cierre CSV: ${lastDateIso}` : ''}

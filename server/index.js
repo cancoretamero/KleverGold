@@ -150,7 +150,7 @@ app.use(express.json());
 /**
  * GET /api/spot
  * Devuelve el precio spot en vivo consultando GoldAPI.
- * Respuesta: { price, ts } (USD por XAU y timestamp en ms).
+ * Respuesta: { price, bid, ask, ts } (USD por XAU, precios bid/ask y timestamp en ms).
  */
 app.get('/api/spot', async (req, res) => {
   if (!GOLDAPI_KEY) {
@@ -169,9 +169,19 @@ app.get('/api/spot', async (req, res) => {
       if (data?.error) throw new Error(data.error);
       const price = toNumber(data.price);
       if (!Number.isFinite(price) || price <= 0) throw new Error('Precio no válido');
+      const bidRaw = toNumber(data.bid ?? data.bid_price, NaN);
+      const askRaw = toNumber(data.ask ?? data.ask_price, NaN);
       const tsSec = toNumber(data.timestamp);
       const ts = Number.isFinite(tsSec) ? tsSec * 1000 : Date.now();
-      const payload = { price, ts, fetchedAt: Date.now() };
+      const payload = {
+        price,
+        bid: Number.isFinite(bidRaw) && bidRaw > 0 ? bidRaw : null,
+        ask: Number.isFinite(askRaw) && askRaw > 0 ? askRaw : null,
+        ts,
+        fetchedAt: Date.now(),
+        symbol: data.symbol || SYMBOL_INFO.pair,
+        currency: data.currency || SYMBOL_INFO.currency,
+      };
       spotCache.payload = payload;
       spotCache.expiresAt = payload.fetchedAt + SPOT_CACHE_TTL_MS;
       return payload;

@@ -35,31 +35,97 @@ const SOURCES = [
     id: 'fed',
     name: 'Federal Reserve',
     url: 'https://www.federalreserve.gov/feeds/press_all.xml',
+    site: 'https://www.federalreserve.gov',
+    logo: 'https://logo.clearbit.com/federalreserve.gov',
+    category: 'Política monetaria',
   },
   {
     id: 'bls',
     name: 'Bureau of Labor Statistics',
     url: 'https://www.bls.gov/feed/news_release.rss',
+    site: 'https://www.bls.gov',
+    logo: 'https://logo.clearbit.com/bls.gov',
+    category: 'Mercado laboral',
   },
   {
     id: 'bea',
     name: 'Bureau of Economic Analysis',
     url: 'https://apps.bea.gov/rss/rss.xml?feed=gdp',
+    site: 'https://www.bea.gov',
+    logo: 'https://logo.clearbit.com/bea.gov',
+    category: 'Crecimiento',
   },
   {
     id: 'treasury',
     name: 'U.S. Treasury',
     url: 'https://home.treasury.gov/news/press-releases/feed',
+    site: 'https://home.treasury.gov',
+    logo: 'https://logo.clearbit.com/treasury.gov',
+    category: 'Deuda pública',
   },
   {
     id: 'worldbank',
     name: 'World Bank',
     url: 'https://www.worldbank.org/en/news/all?format=rss',
+    site: 'https://www.worldbank.org',
+    logo: 'https://logo.clearbit.com/worldbank.org',
+    category: 'Desarrollo global',
   },
   {
     id: 'imf',
     name: 'IMF Blog',
     url: 'https://blogs.imf.org/feed/',
+    site: 'https://www.imf.org',
+    logo: 'https://logo.clearbit.com/imf.org',
+    category: 'Macro global',
+  },
+  {
+    id: 'marketwatch',
+    name: 'MarketWatch Commodities',
+    url: 'https://feeds.marketwatch.com/marketwatch/commodities',
+    site: 'https://www.marketwatch.com/markets/commodities',
+    logo: 'https://logo.clearbit.com/marketwatch.com',
+    category: 'Mercados',
+  },
+  {
+    id: 'reuters',
+    name: 'Reuters Commodities',
+    url: 'https://feeds.reuters.com/reuters/commoditiesNews',
+    site: 'https://www.reuters.com/markets/commodities',
+    logo: 'https://logo.clearbit.com/reuters.com',
+    category: 'Cobertura global',
+  },
+  {
+    id: 'kitco',
+    name: 'Kitco Metals',
+    url: 'https://www.kitco.com/rss/metals.xml',
+    site: 'https://www.kitco.com',
+    logo: 'https://logo.clearbit.com/kitco.com',
+    category: 'Metales preciosos',
+  },
+  {
+    id: 'mining',
+    name: 'MINING.com',
+    url: 'https://www.mining.com/feed/',
+    site: 'https://www.mining.com',
+    logo: 'https://logo.clearbit.com/mining.com',
+    category: 'Minería',
+  },
+  {
+    id: 'cftc',
+    name: 'CFTC Press',
+    url: 'https://www.cftc.gov/PressRoom/PressReleases/rss',
+    site: 'https://www.cftc.gov',
+    logo: 'https://logo.clearbit.com/cftc.gov',
+    category: 'Regulación',
+  },
+  {
+    id: 'bis',
+    name: 'Bank for International Settlements',
+    url: 'https://www.bis.org/rss/press.xml',
+    site: 'https://www.bis.org',
+    logo: 'https://logo.clearbit.com/bis.org',
+    category: 'Supervisión',
   },
 ];
 
@@ -94,7 +160,7 @@ exports.handler = async (event) => {
         const items = normalizeItems(doc, src);
         for (const item of items) aggregated.push(item);
       } catch (err) {
-        failures.push({ source: src.id, error: err.message || String(err) });
+        failures.push({ source: src.id, name: src.name, error: err.message || String(err) });
       }
     })
   );
@@ -105,14 +171,18 @@ exports.handler = async (event) => {
 
   const map = new Map();
   for (const item of aggregated) {
-    const key = (item.link || item.title || '').toLowerCase();
+    const key = `${item.sourceId}:${(item.link || item.title || '').toLowerCase()}`;
     if (!key) continue;
     if (!map.has(key)) map.set(key, item);
   }
 
+  const nowMs = Date.now();
+  const horizonMs = nowMs - 1000 * 60 * 60 * 24 * 14; // 14 días hacia atrás.
+
   const list = Array.from(map.values())
-    .sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''))
-    .slice(0, 40);
+    .filter((item) => !item.publishedAtMs || item.publishedAtMs >= horizonMs)
+    .sort((a, b) => (b.publishedAtMs || 0) - (a.publishedAtMs || 0))
+    .slice(0, 60);
 
   return H.json(200, { ok: true, items: list, failures });
 };
@@ -139,7 +209,7 @@ function mapRssItem(entry, src) {
   const link = pickLink(entry);
   const dateRaw = textOf(entry.pubDate) || textOf(entry.published) || textOf(entry.updated);
   const summary = textOf(entry.description) || textOf(entry.summary) || '';
-  return buildItem({ title, link, dateRaw, summary, src });
+  return buildItem({ title, link, dateRaw, summary, src, entry });
 }
 
 function mapAtomEntry(entry, src) {
@@ -148,22 +218,30 @@ function mapAtomEntry(entry, src) {
   const link = pickLink(entry);
   const dateRaw = textOf(entry.updated) || textOf(entry.published) || textOf(entry.created);
   const summary = textOf(entry.summary) || textOf(entry.content) || '';
-  return buildItem({ title, link, dateRaw, summary, src });
+  return buildItem({ title, link, dateRaw, summary, src, entry });
 }
 
-function buildItem({ title, link, dateRaw, summary, src }) {
+function buildItem({ title, link, dateRaw, summary, src, entry }) {
   if (!title) return null;
   const cleanSummary = summarize(summary, title);
   const idBase = link || `${src.id}:${title}`;
   const id = crypto.createHash('sha1').update(idBase).digest('hex');
-  const publishedAt = normalizeDate(dateRaw);
+  const { displayDate, timestamp, isoDate } = normalizeDate(dateRaw);
+  const imageHint = extractImage(entry, summary);
   return {
     id,
     title: title.trim(),
     link: link || '',
-    publishedAt,
+    publishedAt: displayDate,
+    publishedAtIso: isoDate,
+    publishedAtMs: timestamp,
     source: src.name,
+    sourceId: src.id,
+    sourceLogo: src.logo || '',
+    sourceCategory: src.category || 'General',
+    sourceSite: src.site || '',
     summaryHint: cleanSummary,
+    imageHint,
   };
 }
 
@@ -195,19 +273,97 @@ function textOf(node) {
 }
 
 function normalizeDate(dateRaw) {
+  const fallback = new Date();
   if (!dateRaw) {
-    return new Date().toISOString().slice(0, 10);
+    return formatDateParts(fallback);
   }
-  const trimmed = dateRaw.trim();
+  const trimmed = String(dateRaw).trim();
+  let parsed = null;
   if (dateRegex.test(trimmed)) {
     const match = trimmed.match(dateRegex);
-    if (match) return match[1];
+    if (match && match[1]) {
+      const candidate = new Date(match[1]);
+      if (Number.isFinite(+candidate)) parsed = candidate;
+    }
   }
-  const d = new Date(trimmed);
-  if (Number.isFinite(+d)) {
-    return d.toISOString().slice(0, 10);
+  if (!parsed) {
+    const candidate = new Date(trimmed);
+    if (Number.isFinite(+candidate)) parsed = candidate;
   }
-  return new Date().toISOString().slice(0, 10);
+  if (!parsed) {
+    const candidate = new Date(Number(trimmed));
+    if (Number.isFinite(+candidate)) parsed = candidate;
+  }
+  if (!parsed) parsed = fallback;
+  return formatDateParts(parsed);
+}
+
+function formatDateParts(date) {
+  const iso = date.toISOString();
+  return {
+    displayDate: iso.slice(0, 10),
+    timestamp: date.getTime(),
+    isoDate: iso,
+  };
+}
+
+function extractImage(entry, summary) {
+  if (!entry) return '';
+  const candidates = [];
+  const enqueue = (value) => {
+    if (typeof value === 'string' && isLikelyImageUrl(value)) candidates.push(value);
+  };
+
+  const walkNode = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach((sub) => walkNode(sub));
+      return;
+    }
+    if (typeof node === 'object') {
+      if (node.url) enqueue(node.url);
+      if (node.href) enqueue(node.href);
+      if (node.link) enqueue(node.link);
+      if (node['@_url']) enqueue(node['@_url']);
+      if (node['@_href']) enqueue(node['@_href']);
+      Object.keys(node).forEach((key) => {
+        if (typeof node[key] === 'object') walkNode(node[key]);
+      });
+    } else if (typeof node === 'string') {
+      enqueue(node);
+    }
+  };
+
+  walkNode(entry.enclosure);
+  walkNode(entry['media:content']);
+  walkNode(entry['media:thumbnail']);
+  walkNode(entry['media:group']);
+  walkNode(entry.image);
+
+  const fromContent = extractImageFromHtml(entry['content:encoded'] || entry.content);
+  if (fromContent) enqueue(fromContent);
+  const fromSummary = extractImageFromHtml(summary);
+  if (fromSummary) enqueue(fromSummary);
+
+  return candidates.find(Boolean) || '';
+}
+
+function isLikelyImageUrl(value) {
+  if (!value || typeof value !== 'string') return false;
+  if (!/^https?:\/\//i.test(value)) return false;
+  const clean = value.split('?')[0];
+  if (/\.(jpe?g|png|webp|gif|avif)$/i.test(clean)) return true;
+  return clean.includes('wp-content') || clean.includes('/media/') || clean.includes('cdn');
+}
+
+function extractImageFromHtml(html) {
+  if (!html) return '';
+  const match = String(html).match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (match && match[1]) {
+    const src = match[1].trim();
+    return isLikelyImageUrl(src) ? src : '';
+  }
+  return '';
 }
 
 function summarize(summary, title) {

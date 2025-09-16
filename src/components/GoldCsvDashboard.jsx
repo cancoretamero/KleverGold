@@ -253,7 +253,9 @@ export default function GoldCsvDashboard() {
             CSV: {CONFIG.CSV_URL ? <span className="font-medium">{CONFIG.CSV_URL}</span> : <span className="text-amber-700">sin URL</span>}
           </span>
         </div>
-        <div className="ml-auto text-xs text-gray-500">API key {CONFIG.API_KEY ? "presente" : "ausente"}</div>
+        <div className="ml-auto text-xs text-gray-500">
+          Backend {CONFIG.BACKEND_BASE ? `remoto (${CONFIG.BACKEND_BASE})` : 'local (mismo origen)'}
+        </div>
       </section>
 
       {/* Últimos datos (usa spot/ohlc si configuras API, si no, se basa en CSV) */}

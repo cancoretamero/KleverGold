@@ -14,7 +14,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { RefreshCcw } from 'lucide-react';
-import { CONFIG } from '../config.js';
+import { fetchSpotPrice } from '../api.js';
 
 /**
  * Widget “Últimos datos del oro”
@@ -23,7 +23,7 @@ import { CONFIG } from '../config.js';
  * calcula el CAGR histórico desde 1971. Utiliza las filas ya cargadas del CSV
  * (prop `rows`) y, si es necesario, rellena los huecos hasta ayer usando
  * `fetchMissingDaysSequential`. También obtiene el precio spot más reciente
- * a través de la API de metales configurada en `CONFIG`.
+ * a través del backend Express configurado para KleverGold.
  */
 
 // Paleta de colores para la gráfica y los indicadores. Mantiene la estética original.
@@ -36,114 +36,10 @@ const PALETTE = {
   grid: 'rgba(0,0,0,0.06)',
 };
 
-/* ===================== Utilities for spot price ===================== */
-
-/**
- * Helper to fetch JSON and throw on non‑OK responses.
- * @param {string} url
- */
-async function httpJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
-/**
- * Convert a value to a finite number or NaN.
- * @param {any} x
- */
-function toNumber(x) {
-  const v = Number(x);
-  return Number.isFinite(v) ? v : NaN;
-}
-
-/**
- * Deduces the price of one ounce of gold in USD from various API response
- * shapes. Some providers return the inverse (XAU per USD) or nested objects.
- * @param {any} j
- */
-function deriveUSDperXAU(j) {
-  let price = NaN;
-  let ts = Date.now();
-  // MetalsAPI: { success: true, base: 'USD', rates: { XAU: 0.00027 } }
-  if (j && typeof j === 'object' && j.rates) {
-    // XAUUSD directo
-    if (toNumber(j.rates.XAUUSD)) price = toNumber(j.rates.XAUUSD);
-    // USDXAU inverso
-    else if (toNumber(j.rates.USDXAU)) price = 1 / toNumber(j.rates.USDXAU);
-    else {
-      const base = j.base || j.source || '';
-      const rXAU = toNumber(j.rates.XAU);
-      const rUSD = toNumber(j.rates.USD);
-      if (base === 'USD' && Number.isFinite(rXAU)) price = 1 / rXAU;
-      else if (base === 'XAU' && Number.isFinite(rUSD)) price = rUSD;
-      else if (Number.isFinite(rUSD) && Number.isFinite(rXAU)) price = rUSD / rXAU;
-    }
-  }
-  // currencylayer: { quotes: { XAUUSD: ..., USDXAU: ... } }
-  else if (j && typeof j === 'object' && j.quotes) {
-    if (toNumber(j.quotes.XAUUSD)) price = toNumber(j.quotes.XAUUSD);
-    else if (toNumber(j.quotes.USDXAU)) price = 1 / toNumber(j.quotes.USDXAU);
-  }
-  // simple shape: { rate } o { price }
-  else if (Number.isFinite(toNumber(j?.rate))) {
-    price = toNumber(j.rate);
-  } else if (Number.isFinite(toNumber(j?.price))) {
-    price = toNumber(j.price);
-  } else if (j && typeof j === 'object' && j.data) {
-    // variantes: { data: { XAUUSD: { price: ... } } }
-    if (Number.isFinite(toNumber(j.data.XAUUSD))) price = toNumber(j.data.XAUUSD);
-    else if (Number.isFinite(toNumber(j.data.price))) price = toNumber(j.data.price);
-  }
-  // timestamp
-  if (j && typeof j === 'object') {
-    if (Number.isFinite(j.timestamp)) ts = Number(j.timestamp) * 1000;
-    else if (j.date) {
-      const d = Date.parse(j.date);
-      if (!Number.isNaN(d)) ts = d;
-    }
-  }
-  // Heurística: si el valor es pequeño, probablemente está invertido (p.ej. 0.00027 XAU/USD)
-  if (Number.isFinite(price) && price > 0 && price < 10) price = 1 / price;
-  return { price: Number.isFinite(price) && price > 0 ? price : NaN, ts };
-}
-
-/**
- * Intenta obtener el precio spot más reciente de oro (USD por XAU) utilizando
- * diferentes variantes del endpoint `latest` de Metals‑API u otros proveedores
- * compatibles. Usa la clave de API y base definidos en CONFIG.
- */
-async function fetchSpotLatestRobust() {
-  if (!CONFIG.API_KEY) throw new Error('Falta API key');
-  const sym = CONFIG.SYMBOL || 'XAUUSD';
-  // Algunos proveedores usan `symbol` y otros `symbols`. Probamos varias variantes.
-  const candidates = [
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=${sym}`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=${sym}`),
-    // MetalsAPI clásico: base USD, símbolo XAU devuelve XAU por USD (hay que invertir)
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&base=USD&symbols=XAU`),
-    // Algunas variantes minimalistas
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbol=XAU`),
-    new URL(`${CONFIG.API_BASE}/latest?access_key=${CONFIG.API_KEY}&symbols=XAU`),
-  ];
-  let lastErr = null;
-  for (const u of candidates) {
-    try {
-      const json = await httpJSON(u.toString());
-      const { price, ts } = deriveUSDperXAU(json);
-      if (Number.isFinite(price)) return { price, ts };
-      lastErr = new Error('Spot sin precio válido');
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error('Spot no disponible');
-}
-
 /* ===================== Componente GoldNowSection ===================== */
 
 export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDaysSequential }) {
-  // Estado de carga y error para llamadas a Metals API
+  // Estado de carga y error para las llamadas al backend
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
@@ -219,14 +115,14 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
   /**
-   * Pide el precio spot a Metals API usando la función robusta. Actualiza
+   * Pide el precio spot al backend Express y actualiza
    * `spot`, `spotTs` y `spotErr` según corresponda.
    */
   const refreshSpot = useCallback(async () => {
     try {
-      const { price, ts } = await fetchSpotLatestRobust();
+      const { price, ts } = await fetchSpotPrice();
       setSpot(price);
-      setSpotTs(new Date(ts));
+      setSpotTs(ts instanceof Date ? ts : new Date(ts));
       setSpotErr('');
     } catch (e) {
       setSpot(null);

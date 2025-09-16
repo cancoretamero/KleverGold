@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Brush, ReferenceLine } from 'recharts'
 import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload } from "lucide-react"
 import CandleChart from './CandleChart.jsx'
@@ -58,13 +58,23 @@ export default function GoldCsvDashboard() {
   }, [])
 
   // 1) Reemplazar/añadir CSV manualmente (merge por fecha)
-  function onCsvUpload(rows) {
+  const onCsvUpload = useCallback((rows) => {
     const map = mapByDate(rows)
     const current = mapByDate(baseRows)
     for (const [k, v] of map.entries()) current.set(k, v)
     const merged = rowsFromMap(current)
     setBaseRows(merged)
-  }
+  }, [baseRows])
+
+  const onAppendRows = useCallback((rowsNew) => {
+    if (!rowsNew?.length) return
+    const m = mapByDate(extraRows)
+    for (const r of rowsNew) m.set(r.date.toISOString().slice(0, 10), r)
+    const merged = rowsFromMap(m)
+    setExtraRows(merged)
+    saveExtraToLS(merged)
+    persistRowsToRepo(rowsNew).catch(() => {})
+  }, [extraRows])
 
   // 2) Datos combinados (CSV + extra)
   const rows = useMemo(() => {
@@ -208,22 +218,17 @@ export default function GoldCsvDashboard() {
     return allDays.filter((d) => !have.has(d))
   }, [presetRange, rows])
 
-  async function fillGaps() {
+  const fillGaps = useCallback(async () => {
     if (!gaps.length) return
     setFilling(true)
     try {
       const rowsNew = await fetchMissingDaysOptimized(gaps)
       if (!rowsNew.length) return
-      const m = mapByDate(extraRows)
-      for (const r of rowsNew) m.set(r.date.toISOString().slice(0, 10), r)
-      const merged = rowsFromMap(m)
-      setExtraRows(merged)
-      saveExtraToLS(merged)
-      persistRowsToRepo(rowsNew).catch(()=>{})
+      onAppendRows(rowsNew)
     } finally {
       setFilling(false)
     }
-  }
+  }, [gaps, onAppendRows])
 
   const needCsv = baseRows.length === 0 && !loadingBase
 
@@ -262,15 +267,7 @@ export default function GoldCsvDashboard() {
       <GoldNowSection
         rows={rows}
         fetchMissingDaysSequential={fetchMissingDaysOptimized}
-        onAppendRows={(rowsNew) => {
-          if (!rowsNew?.length) return
-          const m = mapByDate(extraRows)
-          for (const r of rowsNew) m.set(r.date.toISOString().slice(0,10), r)
-          const merged = rowsFromMap(m)
-          setExtraRows(merged)
-          saveExtraToLS(merged)
-          persistRowsToRepo(rowsNew).catch(()=>{})
-        }}
+        onAppendRows={onAppendRows}
       />
 
       {/* Noticias (demo estética) */}

@@ -99,6 +99,12 @@ export async function loadCsvFromUrl(url) {
   if (!res.ok) throw new Error(`No se pudo cargar CSV (${res.status})`);
   const text = await res.text();
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  // Papa.parse puede retornar datos parciales aun cuando registra errores, por eso
+  // verificamos y fallamos temprano para evitar procesar datos inconsistentes.
+  if (parsed.errors && parsed.errors.length) {
+    console.error("Errores al parsear CSV", parsed.errors);
+    throw new Error("Papa.parse encontró errores en el CSV");
+  }
   const rows = (parsed.data || [])
     .map((r) => {
       const date = toDate(r.date || r.Date || r.timestamp || r.time);

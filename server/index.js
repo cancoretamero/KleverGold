@@ -13,6 +13,15 @@ const SYMBOL_RAW = process.env.SYMBOL || 'XAUUSD';
 const DEFAULT_CSV_PATH = path.resolve(process.cwd(), 'public', 'data', 'xauusd_ohlc_clean.csv');
 const CSV_PATH = process.env.CSV_PATH ? path.resolve(process.env.CSV_PATH) : DEFAULT_CSV_PATH;
 
+const toPositiveNumber = (value, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+};
+
+const SPOT_CACHE_TTL_MS = toPositiveNumber(process.env.SPOT_CACHE_TTL_MS, 60_000);
+const HISTORICAL_CACHE_TTL_MS = toPositiveNumber(process.env.HISTORICAL_CACHE_TTL_MS, 5 * 60_000);
+const GOLDAPI_MIN_INTERVAL_MS = toPositiveNumber(process.env.GOLDAPI_MIN_INTERVAL_MS, 250);
+
 function parseSymbolPair(input = 'XAUUSD') {
   const str = String(input || '').toUpperCase();
   // Admite variantes como XAU/USD, XAU-USD o simplemente XAUUSD
@@ -44,12 +53,44 @@ const axiosConfig = {
 
 const goldApiClient = axios.create(axiosConfig);
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let goldApiQueue = Promise.resolve();
+let lastGoldApiCallTs = 0;
+
+const scheduleGoldApiRequest = (fn) => {
+  const task = goldApiQueue.then(async () => {
+    if (GOLDAPI_MIN_INTERVAL_MS > 0) {
+      const now = Date.now();
+      const elapsed = now - lastGoldApiCallTs;
+      if (elapsed < GOLDAPI_MIN_INTERVAL_MS) {
+        await delay(GOLDAPI_MIN_INTERVAL_MS - elapsed);
+      }
+      lastGoldApiCallTs = Date.now();
+    }
+    return fn();
+  });
+  goldApiQueue = task.catch(() => undefined);
+  return task;
+};
+
+const goldApiGet = (path) => scheduleGoldApiRequest(() => goldApiClient.get(path));
+
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const toNumber = (value, fallback = NaN) => {
   if (value === null || value === undefined || value === '') return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
+
+const spotCache = {
+  payload: null,
+  expiresAt: 0,
+  promise: null,
+};
+
+const historicalCache = new Map();
+const historicalCacheKey = (from, to) => `${from}::${to}`;
 
 function normalizeOhlc(row, defaults = {}) {
   const date = String(row?.date || defaults.date || '').slice(0, 10);
@@ -115,20 +156,89 @@ app.get('/api/spot', async (req, res) => {
   if (!GOLDAPI_KEY) {
     return res.status(500).json({ ok: false, error: 'Falta GOLDAPI_KEY' });
   }
+
+  const now = Date.now();
+  if (spotCache.payload && spotCache.expiresAt > now) {
+    return res.json({ ok: true, ...spotCache.payload, cached: true });
+  }
+
+  if (!spotCache.promise) {
+    spotCache.promise = (async () => {
+      const response = await goldApiGet(`/${SYMBOL_INFO.metal}/${SYMBOL_INFO.currency}`);
+      const data = response.data || {};
+      if (data?.error) throw new Error(data.error);
+      const price = toNumber(data.price);
+      if (!Number.isFinite(price) || price <= 0) throw new Error('Precio no válido');
+      const tsSec = toNumber(data.timestamp);
+      const ts = Number.isFinite(tsSec) ? tsSec * 1000 : Date.now();
+      const payload = { price, ts, fetchedAt: Date.now() };
+      spotCache.payload = payload;
+      spotCache.expiresAt = payload.fetchedAt + SPOT_CACHE_TTL_MS;
+      return payload;
+    })();
+    spotCache.promise.finally(() => {
+      spotCache.promise = null;
+    });
+  }
+
   try {
-    const response = await goldApiClient.get(`/${SYMBOL_INFO.metal}/${SYMBOL_INFO.currency}`);
-    const data = response.data || {};
-    if (data?.error) throw new Error(data.error);
-    const price = toNumber(data.price);
-    if (!Number.isFinite(price) || price <= 0) throw new Error('Precio no válido');
-    const tsSec = toNumber(data.timestamp);
-    const ts = Number.isFinite(tsSec) ? tsSec * 1000 : Date.now();
-    res.json({ ok: true, price, ts });
+    const payload = await spotCache.promise;
+    return res.json({ ok: true, ...payload, cached: false });
   } catch (error) {
     const detail = error?.response?.data?.error || error?.message || 'Error desconocido';
-    res.status(502).json({ ok: false, error: 'No se pudo obtener el spot', detail });
+    if (spotCache.payload) {
+      return res.json({
+        ok: true,
+        ...spotCache.payload,
+        cached: true,
+        stale: true,
+        detail,
+      });
+    }
+    return res.status(502).json({ ok: false, error: 'No se pudo obtener el spot', detail });
   }
 });
+
+const fetchHistoricalRange = async (from, to) => {
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  const rows = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const yyyymmdd = iso(cursor).replace(/-/g, '');
+    try {
+      const response = await goldApiGet(`/${SYMBOL_INFO.metal}/${SYMBOL_INFO.currency}/${yyyymmdd}`);
+      const data = response.data || {};
+      if (data?.error) throw new Error(data.error);
+      const base = {
+        date: iso(cursor),
+        open: toNumber(data.open_price, data.price),
+        high: toNumber(data.high_price, data.price),
+        low: toNumber(data.low_price, data.price),
+        close: toNumber(data.price ?? data.close_price, data.price),
+        symbol: SYMBOL_INFO.pair,
+      };
+      const normalized = normalizeOhlc(base);
+      if (normalized) {
+        rows.push({
+          date: normalized.date,
+          open: normalized.open,
+          high: normalized.high,
+          low: normalized.low,
+          close: normalized.close,
+        });
+      }
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 404 || status === 422) {
+        console.warn(`GoldAPI sin datos para ${iso(cursor)} (${status})`);
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (!rows.length) throw new Error('Datos vacíos');
+  return rows;
+};
 
 /**
  * GET /api/historical?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -157,48 +267,47 @@ app.get('/api/historical', async (req, res) => {
 
   if (from > to) from = to;
 
+  const key = historicalCacheKey(from, to);
+  let entry = historicalCache.get(key);
+  const now = Date.now();
+
+  if (entry?.payload && entry.expiresAt > now) {
+    return res.json({ ok: true, rows: entry.payload.rows, cached: true });
+  }
+
+  if (!entry) {
+    entry = { payload: null, expiresAt: 0, promise: null };
+    historicalCache.set(key, entry);
+  }
+
+  if (!entry.promise) {
+    entry.promise = (async () => {
+      const rows = await fetchHistoricalRange(from, to);
+      const payload = { rows, fetchedAt: Date.now() };
+      entry.payload = payload;
+      entry.expiresAt = payload.fetchedAt + HISTORICAL_CACHE_TTL_MS;
+      return payload;
+    })();
+    entry.promise.finally(() => {
+      entry.promise = null;
+    });
+  }
+
   try {
-    const start = new Date(`${from}T00:00:00Z`);
-    const end = new Date(`${to}T00:00:00Z`);
-    const rows = [];
-    for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-      const yyyymmdd = iso(cursor).replace(/-/g, '');
-      try {
-        const response = await goldApiClient.get(`/${SYMBOL_INFO.metal}/${SYMBOL_INFO.currency}/${yyyymmdd}`);
-        const data = response.data || {};
-        if (data?.error) throw new Error(data.error);
-        const base = {
-          date: iso(cursor),
-          open: toNumber(data.open_price, data.price),
-          high: toNumber(data.high_price, data.price),
-          low: toNumber(data.low_price, data.price),
-          close: toNumber(data.price ?? data.close_price, data.price),
-          symbol: SYMBOL_INFO.pair,
-        };
-        const normalized = normalizeOhlc(base);
-        if (normalized) {
-          rows.push({
-            date: normalized.date,
-            open: normalized.open,
-            high: normalized.high,
-            low: normalized.low,
-            close: normalized.close,
-          });
-        }
-      } catch (error) {
-        const status = error?.response?.status;
-        if (status === 404 || status === 422) {
-          console.warn(`GoldAPI sin datos para ${iso(cursor)} (${status})`);
-          continue;
-        }
-        throw error;
-      }
-    }
-    if (!rows.length) throw new Error('Datos vacíos');
-    res.json({ ok: true, rows });
+    const payload = await entry.promise;
+    return res.json({ ok: true, rows: payload.rows, cached: false });
   } catch (error) {
     const detail = error?.response?.data?.error || error?.message || 'Error desconocido';
-    res.status(502).json({ ok: false, error: 'Error en histórico', detail });
+    if (entry.payload) {
+      return res.json({
+        ok: true,
+        rows: entry.payload.rows,
+        cached: true,
+        stale: true,
+        detail,
+      });
+    }
+    return res.status(502).json({ ok: false, error: 'Error en histórico', detail });
   }
 });
 

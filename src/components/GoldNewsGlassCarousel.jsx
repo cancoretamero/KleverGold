@@ -1,144 +1,306 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ExternalLink, ChevronLeft, ChevronRight, Sparkles, RefreshCcw } from 'lucide-react';
+import { scoreNewsItems } from '../utils/newsMoE.js';
 
 /**
- * GoldNewsGlassCarousel — v1.3 (corregido)
- * - Sombras INDIVIDUALES (levitación) + overflow vertical (sin línea de corte).
- * - Scrollbar oculta (sin deslizador gris).
- * - Posición inicial fija (2ª tarjeta; configurable con initialIndex).
- * - Imágenes robustas (preload + skeleton + fallbacks temáticos ESTABLES).
- * - Demo estética con datos falsos.
+ * GoldNewsGlassCarousel — agregador premium con IA libre.
+ * - Feed abierto vía Netlify Function con tolerancia a fallos.
+ * - Escoring Mixture-of-Experts local con @xenova/transformers.
+ * - Carrusel glassmorphism con sombras individuales y scroll-snap.
+ * - Imágenes robustas (preload + skeleton + fallbacks temáticos) sin barra visible.
  */
 export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
-  const data = useMemo(() => (items && items.length ? items : FAKE_NEWS), [items]);
+  const [news, setNews] = useState(items ?? []);
+  const [status, setStatus] = useState(items?.length ? 'ready' : 'idle');
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [failures, setFailures] = useState([]);
   const wrapRef = useRef(null);
+  const firstLoad = useRef(false);
   const [active, setActive] = useState(initialIndex);
 
-  // Centra la tarjeta inicial
-  useEffect(() => {
-    const el = wrapRef.current; if (!el) return;
-    const card = el.querySelector('[data-card]');
-    if (!card) return;
-    const gap = 24;
-    const w = card.getBoundingClientRect().width;
-    const left = Math.max(0, initialIndex * (w + gap) - (el.clientWidth - w) / 2);
-    el.scrollLeft = left;
-    setActive(initialIndex);
-  }, [data, initialIndex]);
+  const displayItems = useMemo(() => {
+    if (items && items.length) return items;
+    return news;
+  }, [items, news]);
 
-  // Observa la tarjeta más visible para los bullets
+  const hasData = displayItems.length > 0;
+  const isLoading = status === 'loading';
+  const isError = status === 'error';
+  const isEmpty = status === 'empty';
+
+  const fetchNews = useCallback(async () => {
+    setStatus('loading');
+    setRefreshing(true);
+    setError('');
+    try {
+      const res = await fetch('/.netlify/functions/news-feed', { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = await res.json();
+      if (!payload?.ok || !Array.isArray(payload.items)) throw new Error('Respuesta inválida del feed');
+      const scored = await scoreNewsItems(payload.items);
+      setNews(scored);
+      setFailures(Array.isArray(payload.failures) ? payload.failures : []);
+      setStatus(scored.length ? 'ready' : 'empty');
+      setActive(scored.length > initialIndex ? initialIndex : 0);
+    } catch (err) {
+      setError(err.message || 'No se pudo cargar el feed.');
+      setNews([]);
+      setFailures([]);
+      setStatus('error');
+      setActive(0);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [initialIndex]);
+
   useEffect(() => {
-    const el = wrapRef.current; if (!el) return;
+    if (items && items.length) {
+      setStatus('ready');
+      setNews(items);
+      setFailures([]);
+      return;
+    }
+    if (!firstLoad.current) {
+      firstLoad.current = true;
+      fetchNews();
+    }
+  }, [items, fetchNews]);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || !hasData) return;
+    const handle = requestAnimationFrame(() => {
+      const card = el.querySelector('[data-card]');
+      if (!card) return;
+      const gap = 24;
+      const width = card.getBoundingClientRect().width;
+      const idx = initialIndex < displayItems.length ? initialIndex : 0;
+      const left = Math.max(0, idx * (width + gap) - (el.clientWidth - width) / 2);
+      el.scrollLeft = left;
+      setActive(idx);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [displayItems, hasData, initialIndex]);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || !hasData) return;
     const io = new IntersectionObserver((entries) => {
       const vis = entries
-        .filter(e => e.isIntersecting)
-        .map(e => ({ idx: Number(e.target.getAttribute('data-idx')), ratio: e.intersectionRatio }))
+        .filter((entry) => entry.isIntersecting)
+        .map((entry) => ({
+          idx: Number(entry.target.getAttribute('data-idx')),
+          ratio: entry.intersectionRatio,
+        }))
         .sort((a, b) => b.ratio - a.ratio);
       if (vis[0]) setActive(vis[0].idx);
-    }, { root: el, threshold: [0.6, 0.8, 1] });
-    el.querySelectorAll('[data-card]').forEach(c => io.observe(c));
+    }, { root: el, threshold: [0.55, 0.75, 0.95] });
+    el.querySelectorAll('[data-card]').forEach((card) => io.observe(card));
     return () => io.disconnect();
-  }, [data]);
+  }, [displayItems, hasData]);
 
-  function scrollByCards(dir = 1) {
-    const el = wrapRef.current; if (!el) return;
-    const card = el.querySelector('[data-card]'); const gap = 24;
-    const w = card ? card.getBoundingClientRect().width : 340;
-    el.scrollBy({ left: dir * (w + gap), behavior: 'smooth' });
-  }
+  const scrollByCards = useCallback((dir = 1) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const card = el.querySelector('[data-card]');
+    const gap = 24;
+    const width = card ? card.getBoundingClientRect().width : 340;
+    el.scrollBy({ left: dir * (width + gap), behavior: 'smooth' });
+  }, []);
+
+  const cardsToRender = !hasData && isLoading ? Array.from({ length: 5 }, (_, i) => ({ __skeleton: true, id: `skeleton-${i}` })) : displayItems;
 
   return (
     <section className="relative rounded-3xl border border-black/5 bg-white p-4">
-      {/* Oculta scrollbar y permite overflow vertical para que no se corten sombras */}
       <style>{`
         .news-scroll { -ms-overflow-style: none; scrollbar-width: none; overflow-y: visible; }
         .news-scroll::-webkit-scrollbar { display: none; height: 0; background: transparent; }
       `}</style>
 
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
-          <h3 className="text-lg font-semibold tracking-tight">Titulares que mueven el oro</h3>
+          <div>
+            <h3 className="text-lg font-semibold tracking-tight">Últimas que mueven el oro</h3>
+            <p className="text-xs text-gray-500">IA 100% libre · Xenova all-MiniLM-L6-v2</p>
+          </div>
         </div>
-        <div className="text-xs text-gray-500">Demo estética (datos falsos)</div>
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          {refreshing && <span className="text-indigo-600">Actualizando…</span>}
+          <button
+            type="button"
+            onClick={fetchNews}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1 text-xs font-medium text-gray-700 transition hover:border-black/20 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" /> Recargar
+          </button>
+        </div>
       </div>
 
-      <div className="relative">
-        {/* Flechas */}
-        <button
-          aria-label="Anterior"
-          onClick={() => scrollByCards(-1)}
-          className="hidden sm:flex absolute left-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 ring-1 ring-black/5 shadow hover:bg-white"
-        >
-          <ChevronLeft className="w-5 h-5" />
-        </button>
-        <button
-          aria-label="Siguiente"
-          onClick={() => scrollByCards(1)}
-          className="hidden sm:flex absolute right-2 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/90 ring-1 ring-black/5 shadow hover:bg-white"
-        >
-          <ChevronRight className="w-5 h-5" />
-        </button>
+      {failures.length > 0 && (
+        <div className="mb-3 text-xs text-amber-600">
+          Fuentes con incidencias: {failures.map((f) => f.source).join(', ')}.
+        </div>
+      )}
 
-        {/* Fades laterales suaves */}
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-white to-transparent" />
-        <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-white to-transparent" />
+      {isError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-6 text-center text-sm text-rose-700">
+          <p className="mb-3 font-medium">No pudimos actualizar el feed abierto.</p>
+          <p className="mb-4 text-rose-600">{error}</p>
+          <button
+            type="button"
+            onClick={fetchNews}
+            className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-4 py-2 text-white shadow hover:bg-rose-500"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
 
-        {/* Carrusel: scrollbar oculto, gap mayor, padding inferior para sombras */}
-        <div ref={wrapRef} className="news-scroll flex gap-6 overflow-x-auto snap-x snap-mandatory pb-8 px-16">
-          {data.map((it, idx) => (
-            <article key={idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
-              {/* Imagen flotante con sombra propia */}
-              <div className="relative px-2">
-                <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg" />
-                <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_12px_28px_rgba(0,0,0,0.10)] transition-all duration-300">
-                  <Thumb src={it.image} alt={it.title} idx={idx} />
-                </div>
+      {!isError && (
+        <div className="relative">
+          <button
+            aria-label="Anterior"
+            onClick={() => scrollByCards(-1)}
+            className="hidden sm:flex absolute left-[-18px] top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/95 ring-1 ring-black/5 shadow hover:bg-white"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <button
+            aria-label="Siguiente"
+            onClick={() => scrollByCards(1)}
+            className="hidden sm:flex absolute right-[-18px] top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/95 ring-1 ring-black/5 shadow hover:bg-white"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+
+          <div className="pointer-events-none absolute inset-y-0 left-0 w-14 bg-gradient-to-r from-white to-transparent" />
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-14 bg-gradient-to-l from-white to-transparent" />
+
+          <div ref={wrapRef} className="news-scroll flex gap-6 overflow-x-auto snap-x snap-mandatory pb-8 px-16">
+            {cardsToRender.length === 0 && !isLoading && (
+              <div className="min-h-[200px] flex items-center justify-center text-sm text-gray-500">
+                Sin titulares recientes. Intenta recargar en unos minutos.
               </div>
-
-              {/* Tarjeta glass con sombra propia */}
-              <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/50 backdrop-blur-md px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)] hover:shadow-[0_16px_32px_rgba(0,0,0,0.12)] transition-shadow duration-300">
-                <header className="flex items-center justify-between text-[11px] text-gray-500 mb-1">
-                  <div className="flex items-center gap-1">
-                    <span className="font-medium text-indigo-600">{it.source}</span>
-                    <span>•</span>
-                    <span>{it.publishedAt}</span>
+            )}
+            {cardsToRender.map((it, idx) => (
+              it.__skeleton ? (
+                <SkeletonCard key={it.id} />
+              ) : (
+                <article key={it.id || idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
+                  <div className="relative px-2">
+                    <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg transition group-hover:blur-xl" />
+                    <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_14px_30px_rgba(0,0,0,0.12)] transition-all duration-300">
+                      <Thumb src={it.image} alt={it.title} idx={idx} />
+                    </div>
                   </div>
-                  <a href="#" className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-800">
-                    Leer <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                </header>
 
-                <h4 className="text-[17px] leading-snug font-semibold text-gray-900 line-clamp-2 mb-2">{it.title}</h4>
-                <p className="text-sm text-gray-700 line-clamp-3 mb-3">{it.reason}</p>
+                  <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/60 backdrop-blur-xl px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)] transition duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.14)]">
+                    <header className="mb-2 flex items-center justify-between text-[11px] text-gray-500">
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium text-indigo-600">{it.source}</span>
+                        <span>•</span>
+                        <span>{it.publishedAt}</span>
+                      </div>
+                      {it.link && (
+                        <a
+                          href={it.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-800"
+                        >
+                          Leer <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </header>
 
-                {/* Badges */}
-                <div className="flex flex-wrap gap-2 mb-3">
-                  <Badge tone={toneBySent(it.sentiment)}>{labelSent(it.sentiment)}</Badge>
-                  <Badge tone={toneByImpact(it.impact)}>Impacto: {labelImpact(it.impact)}</Badge>
-                  <Badge tone="secondary">Sesgo: {it.bias}</Badge>
-                </div>
+                    <h4 className="mb-2 text-[17px] font-semibold leading-snug text-gray-900 line-clamp-2">{it.title}</h4>
+                    <p className="mb-3 text-sm text-gray-700 line-clamp-3">{it.reason}</p>
 
-                {/* Barras de relevancia/confianza */}
-                <div className="grid grid-cols-2 gap-3">
-                  <Meter label="Relevancia" value={it.relevance} />
-                  <Meter label="Confianza" value={it.confidence} />
-                </div>
-              </div>
-            </article>
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      <Badge tone={toneBySent(it.sentiment)}>{labelSent(it.sentiment)}</Badge>
+                      <Badge tone={toneByImpact(it.impact)}>Impacto: {labelImpact(it.impact)}</Badge>
+                      <Badge tone="secondary">Sesgo: {it.bias}</Badge>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <Meter label="Relevancia" value={it.relevance} />
+                      <Meter label="Confianza" value={it.confidence} />
+                    </div>
+                  </div>
+                </article>
+              )
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isError && hasData && (
+        <div className="mt-3 flex items-center justify-center gap-1.5">
+          {displayItems.map((_, i) => (
+            <span
+              key={i}
+              className={`h-1.5 rounded-full transition-all ${i === active ? 'w-6 bg-gray-800' : 'w-2 bg-gray-300'}`}
+            />
           ))}
         </div>
-      </div>
+      )}
 
-      {/* Bullets */}
-      <div className="mt-3 flex items-center justify-center gap-1.5">
-        {data.map((_, i) => (
-          <span key={i} className={`h-1.5 rounded-full transition-all ${i === active ? 'w-6 bg-gray-800' : 'w-2 bg-gray-300'}`} />
-        ))}
-      </div>
+      {isEmpty && !isLoading && (
+        <div className="mt-4 text-center text-xs text-gray-500">El agregador no encontró titulares únicos en las últimas horas.</div>
+      )}
     </section>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <article className="min-w-[320px] max-w-[360px] snap-center">
+      <div className="relative px-2">
+        <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg" />
+        <div className="relative h-44 w-full overflow-hidden rounded-3xl bg-gray-200 shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+          <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-gray-200 via-gray-100 to-gray-200" />
+        </div>
+      </div>
+      <div className="relative -mt-6 rounded-3xl border border-white/30 bg-white/60 px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)]">
+        <div className="mb-2 flex items-center justify-between text-[11px] text-gray-400">
+          <div className="flex items-center gap-1">
+            <span className="inline-block h-3 w-16 rounded-full bg-gray-200" />
+            <span className="inline-block h-3 w-2 rounded-full bg-gray-200" />
+            <span className="inline-block h-3 w-12 rounded-full bg-gray-200" />
+          </div>
+          <span className="inline-block h-3 w-10 rounded-full bg-gray-200" />
+        </div>
+        <div className="mb-3 space-y-2">
+          <div className="h-4 w-11/12 rounded-full bg-gray-200" />
+          <div className="h-4 w-4/5 rounded-full bg-gray-200" />
+        </div>
+        <div className="mb-3 space-y-2">
+          <div className="h-3 w-full rounded-full bg-gray-100" />
+          <div className="h-3 w-5/6 rounded-full bg-gray-100" />
+          <div className="h-3 w-2/3 rounded-full bg-gray-100" />
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <span className="h-5 w-16 rounded-full bg-gray-100" />
+          <span className="h-5 w-20 rounded-full bg-gray-100" />
+          <span className="h-5 w-20 rounded-full bg-gray-100" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <div className="h-3 w-full rounded-full bg-gray-100" />
+            <div className="h-2 rounded-full bg-gray-200" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-full rounded-full bg-gray-100" />
+            <div className="h-2 rounded-full bg-gray-200" />
+          </div>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -218,11 +380,3 @@ const FALLBACKS = [
   'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop'
 ];
 
-/* =================== Datos falsos (demo) =================== */
-const FAKE_NEWS = [
-  { title:'La Fed sugiere pausa larga; rendimientos reales ceden', source:'DemoWire', publishedAt:'2025-09-11', sentiment:'alcista', impact:'alto', bias:'bajo', relevance:0.86, confidence:0.72, reason:'Menor coste de oportunidad favorece al oro; la renta fija pierde atractivo relativo.', image:FALLBACKS[0] },
-  { title:'ETF de oro registran entradas por tercer día consecutivo', source:'DemoWire', publishedAt:'2025-09-10', sentiment:'alcista', impact:'medio', bias:'bajo', relevance:0.74, confidence:0.65, reason:'Flujos positivos suelen apoyar el precio si se mantienen.', image:FALLBACKS[1] },
-  { title:'Dólar repunta tras sorpresas en empleo', source:'DemoWire', publishedAt:'2025-09-09', sentiment:'bajista', impact:'medio', bias:'medio', relevance:0.68, confidence:0.6, reason:'Un USD más fuerte suele presionar a XAUUSD en el corto plazo.', image:FALLBACKS[2] },
-  { title:'Compras oficiales de oro superan expectativas', source:'DemoWire', publishedAt:'2025-09-08', sentiment:'alcista', impact:'alto', bias:'bajo', relevance:0.81, confidence:0.7, reason:'Demanda de bancos centrales añade soporte estructural.', image:FALLBACKS[3] },
-  { title:'Inventarios mineros: caída temporal por huelga', source:'DemoWire', publishedAt:'2025-09-07', sentiment:'alcista', impact:'medio', bias:'medio', relevance:0.62, confidence:0.55, reason:'Riesgo de oferta puede tensar el mercado spot si se prolonga.', image:'https://images.unsplash.com/photo-1581093458791-9d1be6e6b7b5?q=80&w=1600&auto=format&fit=crop' }
-];

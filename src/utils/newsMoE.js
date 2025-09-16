@@ -1,0 +1,364 @@
+// src/utils/newsMoE.js
+// Motor Mixture-of-Experts (MoE) para puntuar titulares sobre XAU/USD en el navegador.
+// Usa @xenova/transformers (Apache-2.0) y pesos MIT opcionales en weights.news.json.
+
+const STOPWORDS = new Set([
+  'the','and','for','that','with','from','this','have','will','into','sobre','cuando','pero','tras','ante','como','porque',
+  'para','por','de','del','los','las','una','unas','unos','este','esta','estas','estos','donde','entre','sobre','hacia',
+  'a','al','en','la','el','un','una','que','se','su','sus','y','or','are','was','were','has','had','been','more','less','than',
+  'after','before','amid','into','blog','news','press','release','data','update','sobre','por','del','las','los','son','usa',
+  'pero','como','segun','según','dijo','dice','they','them','their','its','new','says','say','gov','bank','world','federal',
+  'reserve','treasury','bureau','labor','statistics','analysis','imf','world','bank'
+]);
+
+const EXPERTS = [
+  {
+    id: 'macro',
+    label: 'Macro / Fed',
+    prompt: 'Federal Reserve FOMC interest rates CPI PPI real yields monetary policy inflation growth slowdown',
+    rationale: 'Macro condiciona el coste de oportunidad y los rendimientos reales.',
+    fallback: 'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop',
+  },
+  {
+    id: 'etf',
+    label: 'ETF / Flujos',
+    prompt: 'gold ETF flows holdings demand bullion inflows GLD world gold council exchange traded funds',
+    rationale: 'Los flujos en ETF reflejan demanda de inversión en oro físico.',
+    fallback: 'https://images.unsplash.com/photo-1593672715438-d88a70629abe?q=80&w=1600&auto=format&fit=crop',
+  },
+  {
+    id: 'usd',
+    label: 'USD / FX',
+    prompt: 'US dollar DXY treasury yields USD strength currency foreign exchange real rates',
+    rationale: 'El dólar fuerte o débil altera el precio relativo del oro.',
+    fallback: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop',
+  },
+  {
+    id: 'cb',
+    label: 'Bancos centrales / Minería',
+    prompt: 'central bank gold purchases reserves supply mining output strikes production miners geopolitics bullion demand',
+    rationale: 'Compras oficiales y shocks de oferta ajustan el balance físico.',
+    fallback: 'https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1600&auto=format&fit=crop',
+  },
+];
+
+const FALLBACK_MINING = 'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop';
+
+const DEFAULT_HEADS = {
+  relevance: {
+    macro: { scale: 3.6, bias: -0.4 },
+    etf: { scale: 3.8, bias: -0.5 },
+    usd: { scale: 3.4, bias: -0.4 },
+    cb: { scale: 3.2, bias: -0.35 },
+  },
+  impact: {
+    macro: { scale: 4.2, bias: -0.6 },
+    etf: { scale: 4.0, bias: -0.5 },
+    usd: { scale: 4.0, bias: -0.6 },
+    cb: { scale: 4.4, bias: -0.55 },
+  },
+  bias: {
+    macro: { scale: 2.2, bias: 0 },
+    etf: { scale: 2.0, bias: 0 },
+    usd: { scale: 2.4, bias: 0 },
+    cb: { scale: 2.1, bias: 0 },
+  },
+  confidence: {
+    macro: { scale: 3.0, bias: -0.3 },
+    etf: { scale: 3.2, bias: -0.3 },
+    usd: { scale: 2.8, bias: -0.25 },
+    cb: { scale: 3.0, bias: -0.25 },
+  },
+};
+
+let extractorPromise = null;
+let expertsPromise = null;
+let weightsPromise = null;
+
+async function loadExtractor() {
+  if (!extractorPromise) {
+    extractorPromise = (async () => {
+      const mod = await import('@xenova/transformers');
+      mod.env.allowLocalModels = false;
+      mod.env.useBrowserCache = true;
+      mod.env.backends.onnx.wasm.proxy = false;
+      return mod.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    })();
+  }
+  return extractorPromise;
+}
+
+async function loadExpertVectors() {
+  if (!expertsPromise) {
+    expertsPromise = (async () => {
+      const extractor = await loadExtractor();
+      const vectors = [];
+      for (const expert of EXPERTS) {
+        const output = await extractor(expert.prompt, { pooling: 'mean', normalize: true });
+        const data = Array.from(output.data ?? output);
+        vectors.push({ ...expert, vector: data });
+      }
+      return vectors;
+    })();
+  }
+  return expertsPromise;
+}
+
+async function loadHeads() {
+  if (!weightsPromise) {
+    weightsPromise = (async () => {
+      try {
+        const res = await fetch('/weights.news.json', { cache: 'no-cache' });
+        if (!res.ok) throw new Error('weights 404');
+        const json = await res.json();
+        return mergeHeads(DEFAULT_HEADS, json);
+      } catch {
+        return DEFAULT_HEADS;
+      }
+    })();
+  }
+  return weightsPromise;
+}
+
+function mergeHeads(base, incoming) {
+  if (!incoming || typeof incoming !== 'object') return base;
+  const out = JSON.parse(JSON.stringify(base));
+  for (const metric of Object.keys(base)) {
+    if (!incoming[metric]) continue;
+    for (const expertId of Object.keys(base[metric])) {
+      if (!incoming[metric][expertId]) continue;
+      const target = incoming[metric][expertId];
+      const dest = out[metric][expertId];
+      if (typeof target.scale === 'number') dest.scale = target.scale;
+      if (typeof target.bias === 'number') dest.bias = target.bias;
+    }
+  }
+  return out;
+}
+
+export async function scoreNewsItems(items = []) {
+  if (!items.length) return [];
+  const [vectors, heads] = await Promise.all([loadExpertVectors(), loadHeads()]);
+  const extractor = await loadExtractor();
+
+  const results = [];
+  for (const item of items) {
+    const text = buildEmbeddingText(item);
+    const output = await extractor(text, { pooling: 'mean', normalize: true });
+    const embedding = Array.from(output.data ?? output);
+    const gating = computeGating(embedding, vectors);
+    const metrics = computeMetrics(embedding, vectors, heads, gating.alphas, item);
+    const sentiment = estimateSentiment(item, metrics, gating, embedding);
+    const biasLabel = levelFromScore(metrics.bias);
+    const impactLabel = impactLevel(metrics.impact);
+    const reason = buildReason(item, gating, sentiment, metrics);
+    const image = chooseImage(item, gating);
+    results.push({
+      ...item,
+      reason,
+      image,
+      expertTop: gating.top.id,
+      experts: gating.detail,
+      impact: impactLabel,
+      bias: biasLabel,
+      sentiment,
+      relevance: clamp01(metrics.relevance),
+      confidence: clamp01(metrics.confidence),
+      impactScore: clamp01(metrics.impact),
+      biasScore: clamp01(metrics.bias),
+    });
+  }
+  return results;
+}
+
+function buildEmbeddingText(item) {
+  const base = `${item.title || ''}. ${item.summaryHint || ''}`.trim();
+  return base || (item.title || '');
+}
+
+function computeGating(embedding, vectors) {
+  const sims = vectors.map((expert) => ({
+    expert,
+    cos: dot(embedding, expert.vector),
+  }));
+  const temperature = 0.38;
+  const maxCos = Math.max(...sims.map((s) => s.cos));
+  const exps = sims.map((s) => Math.exp((s.cos - maxCos) / temperature));
+  const sum = exps.reduce((a, b) => a + b, 0) || 1;
+  const alphas = exps.map((v) => v / sum);
+  const detail = sims.map((s, i) => ({
+    id: s.expert.id,
+    label: s.expert.label,
+    alpha: alphas[i],
+    cos: s.cos,
+  }));
+  detail.sort((a, b) => b.alpha - a.alpha);
+  return { alphas, detail, top: detail[0] };
+}
+
+function computeMetrics(embedding, vectors, heads, alphas, item) {
+  const scores = { relevance: 0, impact: 0, bias: 0, confidence: 0 };
+  let idx = 0;
+  for (const expert of vectors) {
+    const cos = dot(embedding, expert.vector);
+    const recencyBoost = recencyFactor(item.publishedAt);
+    for (const metric of Object.keys(scores)) {
+      const params = heads[metric][expert.id];
+      const raw = logistic((params.scale ?? 1) * cos + (params.bias ?? 0));
+      let value = raw;
+      if (metric === 'relevance') value *= recencyBoost;
+      if (metric === 'confidence') value *= confidenceAdjust(item);
+      scores[metric] += alphas[idx] * value;
+    }
+    idx += 1;
+  }
+  return scores;
+}
+
+function estimateSentiment(item, metrics, gating, embedding) {
+  const text = `${item.title || ''} ${item.summaryHint || ''}`.toLowerCase();
+  const lexical = lexicalPolarity(text);
+  const impactCentered = (clamp01(metrics.impact) - 0.5) * 1.4;
+  const directional = themeDirectionalBoost(gating.top, text);
+  const score = clamp(-1, 1, lexical * 0.45 + impactCentered * 0.4 + directional * 0.3);
+  if (score > 0.12) return 'alcista';
+  if (score < -0.12) return 'bajista';
+  return 'neutro';
+}
+
+function themeDirectionalBoost(top, text) {
+  if (!top) return 0;
+  let delta = 0;
+  if (top.id === 'macro') {
+    if (/rate cut|cooling inflation|slowdown|yield decline|softer inflation/.test(text)) delta += 0.25;
+    if (/rate hike|hawkish|tighten|sticky inflation|hot inflation/.test(text)) delta -= 0.25;
+  } else if (top.id === 'etf') {
+    if (/inflow|build|accumulate|buying/.test(text)) delta += 0.2;
+    if (/outflow|redemption|selling|liquidat/.test(text)) delta -= 0.2;
+  } else if (top.id === 'usd') {
+    if (/dollar strengthens|dxy rises|usd rally|greenback climbs/.test(text)) delta -= 0.25;
+    if (/dollar weakens|usd slips|greenback eases|dxy falls/.test(text)) delta += 0.25;
+  } else if (top.id === 'cb') {
+    if (/central bank buying|reserve build|purchases/.test(text)) delta += 0.25;
+    if (/selling reserves|dumping gold|export surge/.test(text)) delta -= 0.2;
+    if (/mine|mining|strike|output|production/.test(text)) delta += 0.1;
+  }
+  return clamp(-0.35, 0.35, delta * top.alpha);
+}
+
+function lexicalPolarity(text) {
+  if (!text) return 0;
+  const positives = [
+    'cut', 'cool', 'ease', 'support', 'demand', 'buy', 'inflow', 'weaker dollar',
+    'deficit', 'slowdown', 'stimulus', 'bullish', 'acquire', 'secure', 'increase reserves',
+  ];
+  const negatives = [
+    'hike', 'strong', 'hawkish', 'surge', 'sell', 'outflow', 'liquidation', 'tighten',
+    'slump', 'rebound dollar', 'rebound usd', 'dump', 'oversupply', 'recession risk', 'strike ends',
+  ];
+  let pos = 0;
+  let neg = 0;
+  for (const key of positives) if (text.includes(key)) pos += 1;
+  for (const key of negatives) if (text.includes(key)) neg += 1;
+  if (pos === 0 && neg === 0) return 0;
+  const raw = (pos - neg) / Math.max(3, pos + neg);
+  return clamp(-1, 1, raw);
+}
+
+function buildReason(item, gating, sentiment, metrics) {
+  const keywords = extractKeywords(`${item.title || ''} ${item.summaryHint || ''}`);
+  const keyLine = keywords.length ? `Claves: ${keywords.join(', ')}.` : 'Claves: variaciones macro y de flujos.';
+  const alphaPct = Math.round((gating.top?.alpha ?? 0) * 100);
+  const tone = sentiment === 'alcista' ? 'sesgo favorable al oro' : sentiment === 'bajista' ? 'presión bajista' : 'impacto neutral';
+  const topExpert = EXPERTS.find((exp) => exp.id === gating.top?.id);
+  const rationale = topExpert ? topExpert.rationale : 'Impacto diversificado.';
+  const impactText = impactLevel(metrics.impact, true);
+  return `${topExpert ? topExpert.label : 'Mixto'} domina (${alphaPct}% α). ${rationale} Impacto ${impactText} y ${tone}; ${keyLine}`;
+}
+
+function chooseImage(item, gating) {
+  const text = `${item.title || ''} ${item.summaryHint || ''}`.toLowerCase();
+  if (/mine|mining|strike|pit|ore|production/.test(text)) return FALLBACK_MINING;
+  const topId = gating.top?.id;
+  const expert = EXPERTS.find((e) => e.id === topId);
+  return expert?.fallback || FALLBACK_MINING;
+}
+
+function recencyFactor(isoDate) {
+  if (!isoDate) return 0.85;
+  const now = new Date();
+  const ref = new Date(isoDate);
+  if (!Number.isFinite(+ref)) return 0.85;
+  const diff = (now - ref) / (1000 * 60 * 60 * 24);
+  if (diff <= 1) return 1;
+  if (diff <= 7) return 0.95;
+  if (diff <= 14) return 0.9;
+  if (diff <= 30) return 0.8;
+  return 0.7;
+}
+
+function confidenceAdjust(item) {
+  let factor = 1;
+  if (!item.summaryHint) factor *= 0.85;
+  if (!item.link) factor *= 0.9;
+  return factor;
+}
+
+function extractKeywords(text) {
+  const words = (text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9áéíóúñü]+/)
+    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
+  if (!words.length) return [];
+  const freq = new Map();
+  for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
+  const sorted = Array.from(freq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([w]) => w);
+  return sorted.slice(0, 5);
+}
+
+function logistic(x) {
+  return 1 / (1 + Math.exp(-x));
+}
+
+function dot(a, b) {
+  let sum = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i += 1) sum += a[i] * b[i];
+  return sum;
+}
+
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function clamp(min, max, value) {
+  if (!Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function levelFromScore(score) {
+  const v = clamp01(score);
+  if (v >= 0.66) return 'alto';
+  if (v >= 0.33) return 'medio';
+  return 'bajo';
+}
+
+function impactLevel(score, verbose = false) {
+  const v = clamp01(score);
+  if (verbose) {
+    if (v >= 0.66) return 'alto';
+    if (v >= 0.33) return 'medio';
+    return 'bajo';
+  }
+  if (v >= 0.66) return 'alto';
+  if (v >= 0.33) return 'medio';
+  return 'bajo';
+}
+

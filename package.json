@@ -9,9 +9,11 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.15.0",
     "axios": "^1.7.2",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.11",
+    "fast-xml-parser": "^4.5.0",
     "klinecharts": "^9.8.7",
     "lightweight-charts": "^4.2.1",
     "lucide-react": "^0.441.0",

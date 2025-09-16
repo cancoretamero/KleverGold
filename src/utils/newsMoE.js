@@ -44,6 +44,36 @@ const EXPERTS = [
 
 const FALLBACK_MINING = 'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop';
 
+const SOURCE_IMAGE_OVERRIDES = {
+  treasury: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?q=80&w=1600&auto=format&fit=crop',
+  bls: 'https://images.unsplash.com/photo-1525182008055-f88b95ff7980?q=80&w=1600&auto=format&fit=crop',
+  cftc: 'https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?q=80&w=1600&auto=format&fit=crop',
+  mining: FALLBACK_MINING,
+  kitco: 'https://images.unsplash.com/photo-1444653614773-995cb1ef9efa?q=80&w=1600&auto=format&fit=crop',
+};
+
+const IMAGE_PRESETS = [
+  { test: /(cpi|inflation|price index|consumer price|ppi|deflator|inflaci[oó]n)/i, image: 'https://images.unsplash.com/photo-1587583778181-069c2c8003e1?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(jobs|employment|labor|payroll|unemployment|jobless|empleo|n[oó]minas|laboral)/i, image: 'https://images.unsplash.com/photo-1525182008055-f88b95ff7980?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(treasury|bond|yield|auction|t-bill|bono|rendimiento|rendimientos|debt)/i, image: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(dollar|usd|currency|exchange|dxy|divisa|yen|euro|fx)/i, image: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(federal reserve|fed|rate|fomc|central bank|bank of|policy|banqu[eé] central)/i, image: 'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(etf|fund|flows|holdings|inflow|outflow|inversi[oó]n|fondos)/i, image: 'https://images.unsplash.com/photo-1593672715438-d88a70629abe?q=80&w=1600&auto=format&fit=crop' },
+  { test: /(mine|mining|output|production|supply|miner|strike|lingote|reserva|mineral)/i, image: FALLBACK_MINING },
+  { test: /(geopolit|conflict|war|sanction|invasion|geopol[ií]tica|tensi[oó]n)/i, image: 'https://images.unsplash.com/photo-1465447142348-e9952c393450?q=80&w=1600&auto=format&fit=crop' },
+];
+
+const FALLBACKS = [
+  'https://images.unsplash.com/photo-1553729459-efe14ef6055d?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1593672715438-d88a70629abe?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1465479423260-c4afc24172c6?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1521540216272-a50305cd4421?q=80&w=1600&auto=format&fit=crop',
+];
+
 const DEFAULT_HEADS = {
   relevance: {
     macro: { scale: 3.6, bias: -0.4 },
@@ -148,24 +178,32 @@ export async function scoreNewsItems(items = []) {
     const embedding = Array.from(output.data ?? output);
     const gating = computeGating(embedding, vectors);
     const metrics = computeMetrics(embedding, vectors, heads, gating.alphas, item);
-    const sentiment = estimateSentiment(item, metrics, gating, embedding);
-    const biasLabel = levelFromScore(metrics.bias);
-    const impactLabel = impactLevel(metrics.impact);
-    const reason = buildReason(item, gating, sentiment, metrics);
-    const image = chooseImage(item, gating);
+    const metricsClamped = {
+      relevance: clamp01(metrics.relevance),
+      impact: clamp01(metrics.impact),
+      bias: clamp01(metrics.bias),
+      confidence: clamp01(metrics.confidence),
+    };
+    const sentiment = estimateSentiment(item, metricsClamped, gating, embedding);
+    const biasLabel = levelFromScore(metricsClamped.bias);
+    const impactLabel = impactLevel(metricsClamped.impact);
+    const reason = buildReason(item, gating, sentiment, metricsClamped);
+    const image = chooseImage(item, gating, metricsClamped);
+    const insight = buildInsight(item, gating, sentiment, metricsClamped, reason);
     results.push({
       ...item,
       reason,
       image,
-      expertTop: gating.top.id,
+      expertTop: gating.top?.id || '',
       experts: gating.detail,
       impact: impactLabel,
       bias: biasLabel,
       sentiment,
-      relevance: clamp01(metrics.relevance),
-      confidence: clamp01(metrics.confidence),
-      impactScore: clamp01(metrics.impact),
-      biasScore: clamp01(metrics.bias),
+      relevance: metricsClamped.relevance,
+      confidence: metricsClamped.confidence,
+      impactScore: metricsClamped.impact,
+      biasScore: metricsClamped.bias,
+      insight,
     });
   }
   return results;
@@ -201,7 +239,7 @@ function computeMetrics(embedding, vectors, heads, alphas, item) {
   let idx = 0;
   for (const expert of vectors) {
     const cos = dot(embedding, expert.vector);
-    const recencyBoost = recencyFactor(item.publishedAt);
+    const recencyBoost = recencyFactor(item.publishedAtIso || item.publishedAt, item.publishedAtMs);
     for (const metric of Object.keys(scores)) {
       const params = heads[metric][expert.id];
       const raw = logistic((params.scale ?? 1) * cos + (params.bias ?? 0));
@@ -273,28 +311,44 @@ function buildReason(item, gating, sentiment, metrics) {
   const topExpert = EXPERTS.find((exp) => exp.id === gating.top?.id);
   const rationale = topExpert ? topExpert.rationale : 'Impacto diversificado.';
   const impactText = impactLevel(metrics.impact, true);
-  return `${topExpert ? topExpert.label : 'Mixto'} domina (${alphaPct}% α). ${rationale} Impacto ${impactText} y ${tone}; ${keyLine}`;
+  const recency = describeRecency(item.publishedAtIso || item.publishedAt, item.publishedAtMs);
+  return `${topExpert ? topExpert.label : 'Mixto'} domina (${alphaPct}% α). ${rationale} Impacto ${impactText} y ${tone}; ${keyLine} ${recency}`;
 }
 
-function chooseImage(item, gating) {
-  const text = `${item.title || ''} ${item.summaryHint || ''}`.toLowerCase();
-  if (/mine|mining|strike|pit|ore|production/.test(text)) return FALLBACK_MINING;
+function chooseImage(item, gating, metrics) {
+  if (item.imageHint && /^https?:\/\//.test(item.imageHint)) return item.imageHint;
+  if (item.sourceId && SOURCE_IMAGE_OVERRIDES[item.sourceId]) return SOURCE_IMAGE_OVERRIDES[item.sourceId];
+  const text = `${item.title || ''} ${item.summaryHint || ''} ${item.sourceCategory || ''}`.toLowerCase();
+  for (const preset of IMAGE_PRESETS) {
+    if (preset.test.test(text)) return preset.image;
+  }
+  if (metrics && metrics.impact >= 0.66) {
+    const impactPreset = IMAGE_PRESETS.find((preset) => preset.test.test('impacto geopolitico alto'));
+    if (impactPreset) return impactPreset.image;
+  }
   const topId = gating.top?.id;
   const expert = EXPERTS.find((e) => e.id === topId);
-  return expert?.fallback || FALLBACK_MINING;
+  if (expert?.fallback) return expert.fallback;
+  return FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)];
 }
 
-function recencyFactor(isoDate) {
-  if (!isoDate) return 0.85;
-  const now = new Date();
-  const ref = new Date(isoDate);
-  if (!Number.isFinite(+ref)) return 0.85;
-  const diff = (now - ref) / (1000 * 60 * 60 * 24);
-  if (diff <= 1) return 1;
-  if (diff <= 7) return 0.95;
-  if (diff <= 14) return 0.9;
-  if (diff <= 30) return 0.8;
-  return 0.7;
+function recencyFactor(isoDate, timestamp) {
+  const now = Date.now();
+  let reference = Number.isFinite(timestamp) ? timestamp : null;
+  if (!reference && isoDate) {
+    const parsed = Date.parse(isoDate);
+    if (Number.isFinite(parsed)) reference = parsed;
+  }
+  if (!reference) return 0.8;
+  const diffHours = (now - reference) / (1000 * 60 * 60);
+  if (diffHours <= 3) return 1.12;
+  if (diffHours <= 12) return 1.05;
+  if (diffHours <= 24) return 1;
+  if (diffHours <= 48) return 0.9;
+  if (diffHours <= 72) return 0.85;
+  if (diffHours <= 120) return 0.82;
+  if (diffHours <= 168) return 0.78;
+  return 0.72;
 }
 
 function confidenceAdjust(item) {
@@ -302,6 +356,56 @@ function confidenceAdjust(item) {
   if (!item.summaryHint) factor *= 0.85;
   if (!item.link) factor *= 0.9;
   return factor;
+}
+
+function buildInsight(item, gating, sentiment, metrics, reason) {
+  const topExpert = EXPERTS.find((exp) => exp.id === gating.top?.id);
+  const alphaPct = Math.round((gating.top?.alpha ?? 0) * 100);
+  const relevancePct = formatPct(metrics.relevance);
+  const confidencePct = formatPct(metrics.confidence);
+  const impactLabel = impactLevel(metrics.impact, true);
+  const biasLabel = levelFromScore(metrics.bias);
+  const sentimentText = sentimentNarrative(sentiment, impactLabel);
+  const recency = describeRecency(item.publishedAtIso || item.publishedAt, item.publishedAtMs);
+  const originLine = item.publishedAt ? `Publicado el ${item.publishedAt}` : 'Publicación reciente';
+
+  return {
+    summary: item.summaryHint || 'La fuente original no ofrece un sumario. Visita el enlace para el detalle completo.',
+    effect: `El modelo estima un impacto ${impactLabel} ${sentimentText}`,
+    why: topExpert
+      ? `${topExpert.label} concentra ${alphaPct}% del peso analítico (${topExpert.rationale.toLowerCase()}).`
+      : 'Se detecta una combinación equilibrada de factores macro, ETF, USD y bancos centrales.',
+    signals: `Relevancia ${relevancePct} · Confianza ${confidencePct} · Sesgo ${biasLabel}.`,
+    origin: `${originLine} · ${item.source}`,
+    recency,
+    reason,
+  };
+}
+
+function sentimentNarrative(sentiment, impactLabel) {
+  if (sentiment === 'alcista') return `con sesgo positivo para el oro (${impactLabel}).`;
+  if (sentiment === 'bajista') return `con presión negativa para el oro (${impactLabel}).`;
+  return `con impacto neutral para el oro (${impactLabel}).`;
+}
+
+function describeRecency(isoDate, timestamp) {
+  const referenceMs = Number.isFinite(timestamp) ? timestamp : isoDate ? Date.parse(isoDate) : NaN;
+  if (!Number.isFinite(referenceMs)) return 'Momento de publicación desconocido.';
+  const diffMs = Date.now() - referenceMs;
+  if (diffMs < 0) return 'Programado para publicación futura.';
+  const diffHours = diffMs / (1000 * 60 * 60);
+  if (diffHours < 1) return 'Publicado hace menos de una hora.';
+  if (diffHours < 6) return `Publicado hace ${Math.round(diffHours)} horas.`;
+  if (diffHours < 24) return 'Publicado en las últimas 24 horas.';
+  if (diffHours < 48) return 'Publicado en las últimas 48 horas.';
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays <= 7) return `Publicado hace ${diffDays} día${diffDays === 1 ? '' : 's'}.`;
+  return `Publicado hace aproximadamente ${diffDays} días.`;
+}
+
+function formatPct(value) {
+  const pct = Math.round(clamp01(value) * 100);
+  return `${pct}%`;
 }
 
 function extractKeywords(text) {

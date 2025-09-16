@@ -95,6 +95,31 @@ export async function fetchSpotPrice() {
   };
 }
 
+export async function createEmailSignup(payload = {}) {
+  const body = {
+    fullName: typeof payload.fullName === 'string' ? payload.fullName.trim() : '',
+    email: typeof payload.email === 'string' ? payload.email.trim() : '',
+    password: typeof payload.password === 'string' ? payload.password : '',
+    referralCode:
+      typeof payload.referralCode === 'string' && payload.referralCode.trim()
+        ? payload.referralCode.trim()
+        : undefined,
+  };
+
+  const res = await fetch(withBase('/api/signup/email'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) {
+    const msg = json?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return { id: json.id };
+}
+
 // ===== Helpers =====
 function packIntoRanges(dates) {
   if (!dates.length) return [];

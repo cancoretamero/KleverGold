@@ -4,6 +4,8 @@ FIX: Netlify secrets scanning
 
 - Configura en Render (o el host donde corra `server/index.js`) las variables:
   - `GOLDAPI_KEY`, `GOLDAPI_BASE`, `SYMBOL`, `CSV_PATH`, `PORT` (opcional `GOLDAPI_TIMEOUT_MS`).
+  - Opcionales nuevos para controlar caché y rate limiting: `SPOT_CACHE_TTL_MS`,
+    `HISTORICAL_CACHE_TTL_MS`, `GOLDAPI_MIN_INTERVAL_MS`.
 - El frontend ahora llama a `/api/spot`, `/api/historical` y `/api/update-csv`.
   - En Netlify (scope Builds) define `VITE_BACKEND_BASE` si el backend vive en otro dominio.
 - Las claves ya **no se exponen** en el bundle del cliente; quedan en el backend.

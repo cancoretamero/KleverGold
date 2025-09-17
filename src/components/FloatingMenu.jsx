@@ -20,25 +20,7 @@ const SIGNUP_OPTIONS = [
     label: 'Continuar con Google',
     description: 'Conecta con tu cuenta de Google en segundos.',
     Icon: Chrome,
-    accent: 'from-amber-200/80 via-orange-200/70 to-orange-100/70 text-slate-900',
-    action: {
-      type: 'link',
-      href: 'https://accounts.google.com/signup/v2/webcreateaccount?hl=es-419',
-      target: '_blank'
-    }
-  },
-  {
-    id: 'apple',
-    label: 'Continuar con Apple',
-    description: 'Privacidad reforzada con inicio de sesión de Apple.',
-    Icon: Apple,
-    accent: 'from-slate-200/80 via-slate-100/70 to-white/70 text-slate-900',
-    action: {
-      type: 'link',
-      href: 'https://appleid.apple.com/account',
-      target: '_blank'
-    }
-  },
+    acct: ',
   {
     id: 'binance',
     label: 'Entrar con Binance',

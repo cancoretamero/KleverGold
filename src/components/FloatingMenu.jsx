@@ -31,8 +31,7 @@ const SIGNUP_OPTIONS = [
   {
     id: 'apple',
     label: 'Continuar con Apple',
-    description:
-      'Privacidad reforzada con inicio de sesión de Apple.',
+    description: 'Privacidad reforzada con inicio de sesión de Apple.',
     Icon: Apple,
     accent:
       'from-slate-200/80 via-slate-100/70 to-white/70 text-slate-900',
@@ -71,8 +70,7 @@ const SIGNUP_OPTIONS = [
   {
     id: 'passkey',
     label: 'Passkey biométrica',
-    description:
-      'Seguridad de última generación con biometría.',
+    description: 'Seguridad de última generación con biometría.',
     Icon: Fingerprint,
     accent:
       'from-emerald-200/80 via-teal-200/70 to-teal-100/70 text-emerald-900',
@@ -86,8 +84,7 @@ const SIGNUP_OPTIONS = [
   {
     id: 'email',
     label: 'Correo electrónico',
-    description:
-      'Registro clásico con verificación instantánea.',
+    description: 'Registro clásico con verificación instantánea.',
     Icon: Mail,
     accent:
       'from-purple-200/80 via-fuchsia-200/70 to-pink-100/70 text-purple-900',
@@ -97,8 +94,7 @@ const SIGNUP_OPTIONS = [
   {
     id: 'github',
     label: 'GitHub Enterprise',
-    description:
-      'Perfecto para analistas y equipos técnicos.',
+    description: 'Perfecto para analistas y equipos técnicos.',
     Icon: Github,
     accent:
       'from-zinc-200/80 via-slate-200/70 to-slate-100/70 text-slate-900',
@@ -111,8 +107,7 @@ const SIGNUP_OPTIONS = [
   {
     id: 'kyc',
     label: 'Onboarding KYC',
-    description:
-      'Verifica tu identidad con procesos KleverShield.',
+    description: 'Verifica tu identidad con procesos KleverShield.',
     Icon: ShieldCheck,
     accent:
       'from-blue-200/80 via-sky-200/70 to-cyan-100/70 text-blue-900',

@@ -255,8 +255,7 @@ export default function FloatingMenu() {
             </div>
             <p className="mt-4 text-xs text-slate-600 dark:text-slate-400">
               Al continuar aceptas los{' '}
-              <a href="#" className="underline">
-                términos
+              <a href="#" className="underline">                términos
               </a>{' '}
               de KleverGold y nuestra{' '}
               <a href="#" className="underline">

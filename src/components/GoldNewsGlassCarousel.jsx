@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, ChevronLeft, ChevronRight, Sparkles, RefreshCcw } from 'lucide-react';
+import { ExternalLink, ChevronLeft, ChevronRight, Sparkles, RefreshCcw, Info, TrendingUp, Gauge, Clock, X } from 'lucide-react';
 import { scoreNewsItems } from '../utils/newsMoE.js';
 
 /**
@@ -20,6 +20,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
   const wrapRef = useRef(null);
   const firstLoad = useRef(false);
   const [active, setActive] = useState(initialIndex);
+  const [selected, setSelected] = useState(null);
 
   const displayItems = useMemo(() => {
     if (items && items.length) return items;
@@ -51,6 +52,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
       setFailures([]);
       setStatus('error');
       setActive(0);
+      setSelected(null);
     } finally {
       setRefreshing(false);
     }
@@ -61,6 +63,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
       setStatus('ready');
       setNews(items);
       setFailures([]);
+      setSelected(null);
       return;
     }
     if (!firstLoad.current) {
@@ -111,21 +114,30 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
     el.scrollBy({ left: dir * (width + gap), behavior: 'smooth' });
   }, []);
 
+  const openInsight = useCallback((item) => {
+    setSelected(item);
+  }, []);
+
+  const closeInsight = useCallback(() => {
+    setSelected(null);
+  }, []);
+
   const cardsToRender = !hasData && isLoading ? Array.from({ length: 5 }, (_, i) => ({ __skeleton: true, id: `skeleton-${i}` })) : displayItems;
 
   return (
-    <section className="relative rounded-3xl border border-black/5 bg-white p-4">
-      <style>{`
+    <>
+      <section className="relative rounded-3xl border border-black/5 bg-white p-4">
+        <style>{`
         .news-scroll { -ms-overflow-style: none; scrollbar-width: none; overflow-y: visible; }
         .news-scroll::-webkit-scrollbar { display: none; height: 0; background: transparent; }
-      `}</style>
+        `}</style>
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-black/5"><Sparkles className="w-4 h-4" /></div>
           <div>
             <h3 className="text-lg font-semibold tracking-tight">Últimas que mueven el oro</h3>
-            <p className="text-xs text-gray-500">IA 100% libre · Xenova all-MiniLM-L6-v2</p>
+            <p className="text-xs text-gray-500">IA 100% de Aisa Group CA · KleverOrion v.2.0</p>
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -143,7 +155,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
 
       {failures.length > 0 && (
         <div className="mb-3 text-xs text-amber-600">
-          Fuentes con incidencias: {failures.map((f) => f.source).join(', ')}.
+          Fuentes con incidencias: {failures.map((f) => f.name || f.source).join(', ')}.
         </div>
       )}
 
@@ -191,27 +203,66 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
               it.__skeleton ? (
                 <SkeletonCard key={it.id} />
               ) : (
-                <article key={it.id || idx} data-card data-idx={idx} className="group min-w-[320px] max-w-[360px] snap-center">
+                <article
+                  key={it.id || idx}
+                  data-card
+                  data-idx={idx}
+                  className="group min-w-[320px] max-w-[360px] snap-center cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/60 focus-visible:ring-offset-2"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Ampliar resumen de ${it.title}`}
+                  onClick={() => openInsight(it)}
+                  onKeyDown={(evt) => {
+                    if (evt.key === 'Enter' || evt.key === ' ') {
+                      evt.preventDefault();
+                      openInsight(it);
+                    }
+                  }}
+                >
                   <div className="relative px-2">
                     <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg transition group-hover:blur-xl" />
                     <div className="relative rounded-3xl overflow-hidden ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] group-hover:shadow-[0_14px_30px_rgba(0,0,0,0.12)] transition-all duration-300">
-                      <Thumb src={it.image} alt={it.title} idx={idx} />
+                      <Thumb src={it.image || it.imageHint} alt={it.title} idx={idx} />
+                      <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
+                        {it.sourceLogo && (
+                          <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-white/50 bg-white/80 shadow-sm">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={it.sourceLogo}
+                              alt={`${it.source} logo`}
+                              className="h-full w-full object-contain"
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(event) => {
+                                event.currentTarget.style.display = 'none';
+                              }}
+                            />
+                          </span>
+                        )}
+                        {it.sourceCategory && (
+                          <span className="rounded-full bg-black/60 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                            {it.sourceCategory}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/60 backdrop-blur-xl px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)] transition duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.14)]">
-                    <header className="mb-2 flex items-center justify-between text-[11px] text-gray-500">
-                      <div className="flex items-center gap-1">
-                        <span className="font-medium text-indigo-600">{it.source}</span>
-                        <span>•</span>
-                        <span>{it.publishedAt}</span>
+                  <div className="relative -mt-6 rounded-3xl border border-white/20 bg-white/70 backdrop-blur-xl px-4 pt-4 pb-5 shadow-[0_10px_22px_rgba(0,0,0,0.08)] transition duration-300 group-hover:-translate-y-1 group-hover:shadow-[0_18px_38px_rgba(0,0,0,0.14)]">
+                    <header className="mb-3 flex items-start justify-between gap-3 text-[11px] text-gray-500">
+                      <div className="flex items-start gap-2">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-semibold text-indigo-600">{it.source}</span>
+                          <span className="text-[10px] text-gray-400">{it.publishedAt}</span>
+                        </div>
                       </div>
                       {it.link && (
                         <a
                           href={it.link}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-800"
+                          className="inline-flex items-center gap-1 text-gray-600 transition hover:text-gray-800"
+                          onClick={(event) => event.stopPropagation()}
                         >
                           Leer <ExternalLink className="w-3.5 h-3.5" />
                         </a>
@@ -219,7 +270,13 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
                     </header>
 
                     <h4 className="mb-2 text-[17px] font-semibold leading-snug text-gray-900 line-clamp-2">{it.title}</h4>
-                    <p className="mb-3 text-sm text-gray-700 line-clamp-3">{it.reason}</p>
+                    <p className="mb-2 text-sm text-gray-700 line-clamp-3">{it.insight?.effect || it.reason}</p>
+                    {it.insight?.recency && (
+                      <p className="mb-2 text-[11px] text-gray-500 line-clamp-2">{it.insight.recency}</p>
+                    )}
+                    {it.insight?.signals && (
+                      <p className="mb-3 text-[11px] text-gray-500">{it.insight.signals}</p>
+                    )}
 
                     <div className="mb-3 flex flex-wrap gap-2">
                       <Badge tone={toneBySent(it.sentiment)}>{labelSent(it.sentiment)}</Badge>
@@ -230,6 +287,10 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
                     <div className="grid grid-cols-2 gap-3">
                       <Meter label="Relevancia" value={it.relevance} />
                       <Meter label="Confianza" value={it.confidence} />
+                    </div>
+
+                    <div className="mt-4 inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600">
+                      <Sparkles className="h-3.5 w-3.5" /> Ver resumen IA
                     </div>
                   </div>
                 </article>
@@ -254,7 +315,151 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 1 }) {
         <div className="mt-4 text-center text-xs text-gray-500">El agregador no encontró titulares únicos en las últimas horas.</div>
       )}
     </section>
+      {selected && (
+        <InsightModal item={selected} onClose={closeInsight} />
+      )}
+    </>
   );
+}
+
+function InsightModal({ item, onClose }) {
+  useEffect(() => {
+    const handleKey = (evt) => {
+      if (evt.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
+
+  if (!item) return null;
+
+  const experts = Array.isArray(item.experts) ? item.experts.slice(0, 3) : [];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full max-w-4xl overflow-hidden rounded-3xl bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-black/5 text-gray-700 transition hover:bg-black/10"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <div className="grid gap-6 md:grid-cols-[1.1fr_1fr]">
+          <div className="relative">
+            <Thumb src={item.image || item.imageHint} alt={item.title} idx={0} />
+            <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2">
+              {item.sourceLogo && (
+                <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/60 bg-white/80 shadow">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={item.sourceLogo}
+                    alt={`${item.source} logo`}
+                    className="h-full w-full object-contain"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    onError={(event) => {
+                      event.currentTarget.style.display = 'none';
+                    }}
+                  />
+                </span>
+              )}
+              {item.sourceCategory && (
+                <span className="rounded-full bg-black/65 px-3 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
+                  {item.sourceCategory}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4 p-6">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-col text-sm">
+                <span className="text-xs uppercase tracking-wide text-gray-400">{formatDomain(item.sourceSite) || 'Fuente'}</span>
+                <span className="text-base font-semibold text-gray-900">{item.source}</span>
+                {item.insight?.origin && (
+                  <span className="text-xs text-gray-500">{item.insight.origin}</span>
+                )}
+              </div>
+            </div>
+
+            <h3 className="text-xl font-semibold leading-tight text-gray-900">{item.title}</h3>
+
+            <InsightSection icon={Info} title="Resumen" text={item.insight?.summary || item.summaryHint} />
+            <InsightSection icon={TrendingUp} title="Impacto sobre el oro" text={item.insight?.effect} />
+            <InsightSection icon={Sparkles} title="Por qué la IA la seleccionó" text={item.insight?.why} />
+            <InsightSection icon={Gauge} title="Señales cuantitativas" text={item.insight?.signals} />
+            <InsightSection icon={Clock} title="Recencia" text={item.insight?.recency} />
+
+            {experts.length > 0 && (
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-3 text-xs text-indigo-800">
+                <p className="mb-2 font-semibold text-indigo-900">Peso de expertos</p>
+                <ul className="space-y-1">
+                  {experts.map((expert) => (
+                    <li key={expert.id} className="flex items-center justify-between">
+                      <span>{expert.label}</span>
+                      <span>{Math.round((expert.alpha ?? 0) * 100)}%</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <Meter label="Relevancia" value={item.relevance} />
+              <Meter label="Confianza" value={item.confidence} />
+            </div>
+
+            {item.link && (
+              <a
+                href={item.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-indigo-500"
+              >
+                Ir a la fuente original <ExternalLink className="h-4 w-4" />
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InsightSection({ icon: Icon, title, text }) {
+  if (!text) return null;
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-gray-50/80 p-3 text-sm text-gray-700">
+      <div className="mb-1 flex items-center gap-2 text-gray-900">
+        <Icon className="h-4 w-4 text-indigo-600" />
+        <span className="font-semibold">{title}</span>
+      </div>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function formatDomain(url) {
+  if (!url) return '';
+  try {
+    const { hostname } = new URL(url.startsWith('http') ? url : `https://${url}`);
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return url.replace(/^https?:\/\//, '').split('/')[0];
+  }
 }
 
 function SkeletonCard() {

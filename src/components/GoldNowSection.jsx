@@ -21,7 +21,7 @@ import { fetchSpotPrice } from '../api.js';
  *
  * Este componente muestra el último precio del oro, la variación diaria y
  * calcula el CAGR histórico desde 1971. Utiliza las filas ya cargadas del CSV
- * (prop `rows`) y, si es necesario, rellena los huecos hasta ayer usando
+ * (prop `rows`) y, si es necesario, rellena los huecos hasta la fecha actual usando
  * `fetchMissingDaysSequential`. También obtiene el precio spot más reciente
  * a través del backend Express configurado para KleverGold.
  */
@@ -54,12 +54,6 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   const iso = useCallback((d) => d.toISOString().slice(0, 10), []);
   // Hoy a medianoche UTC
   const today = useMemo(() => new Date(new Date().toISOString().slice(0, 10)), []);
-  // Ayer a medianoche UTC
-  const yesterday = useMemo(() => {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - 1);
-    return d;
-  }, [today]);
 
   // Ordenar las filas entrantes por fecha ascendente
   const ordered = useMemo(() => (rows || []).slice().sort((a, b) => +a.date - +b.date), [rows]);
@@ -99,19 +93,22 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
     return { cagrAdmin, cagrMarket };
   }, [ordered, spot, spotTs, lastClose, lastCsvDate, yearsBetween, firstRowOnOrAfter]);
 
-  // Determinar qué días faltan entre la última fecha del CSV y AYER (no hoy)
-  const gapsToYesterday = useMemo(() => {
+  // Determinar qué días faltan entre la última fecha del CSV y HOY
+  const gapsToToday = useMemo(() => {
     if (!lastCsvDate) return [];
     const days = [];
     for (
       let d = new Date(lastCsvDate.getTime() + 86400000);
-      d <= yesterday;
+      d <= today;
       d = new Date(d.getTime() + 86400000)
     ) {
       days.push(iso(d));
     }
     return days;
-  }, [lastCsvDate, yesterday, iso]);
+  }, [lastCsvDate, today, iso]);
+
+  const gapsSignature = useMemo(() => gapsToToday.join('|'), [gapsToToday]);
+  const autoFillRef = useRef('');
 
   const gapsSignature = useMemo(() => gapsToYesterday.join('|'), [gapsToYesterday]);
   const autoFillRef = useRef('');
@@ -142,17 +139,18 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
 
   /**
    * Acciona la actualización manual: refresca el spot e intenta
-   * rellenar los huecos hasta AYER. Marca la hora de la actualización.
+   * rellenar los huecos hasta HOY. Marca la hora de la actualización.
    */
-  const updateNow = useCallback(async () => {
+  const updateNow = useCallback(async (options = {}) => {
+    const { forceFill = false } = options ?? {}
     setLoading(true);
     setError('');
     try {
       // Siempre intenta obtener el spot antes de rellenar huecos
       await refreshSpot();
       // Si hay días faltantes y el padre nos permite pedirlos
-      if (canFetch && gapsToYesterday.length) {
-        const rowsNew = await fetchMissingDaysSequential(gapsToYesterday);
+      if (canFetch && gapsToToday.length) {
+        const rowsNew = await fetchMissingDaysSequential(gapsToToday, { force: forceFill });
         if (rowsNew?.length && typeof onAppendRows === 'function') {
           onAppendRows(rowsNew);
         }
@@ -163,7 +161,7 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
     } finally {
       setLoading(false);
     }
-  }, [refreshSpot, canFetch, gapsToYesterday, onAppendRows]);
+  }, [refreshSpot, canFetch, gapsToToday, onAppendRows, fetchMissingDaysSequential]);
 
   // Al montar el componente: refrescar spot y rellenar huecos si procede
   useEffect(() => {
@@ -200,7 +198,7 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm font-semibold">Últimos datos del oro</div>
         <button
-          onClick={updateNow}
+          onClick={() => updateNow({ forceFill: true })}
           disabled={loading}
           className="inline-flex items-center gap-2 text-xs rounded-md border px-2 py-1 disabled:opacity-60"
         >

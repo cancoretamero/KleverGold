@@ -192,6 +192,12 @@ app.use(express.json());
  */
 app.get('/api/news', async (req, res) => {
   const query = sanitizeQuery(req.query?.q, 'gold price OR gold market');
+  if (!process.env.NEWS_API_KEY) {
+    newsProxyCache.payload = null;
+    newsProxyCache.expiresAt = 0;
+    newsProxyCache.promise = null;
+    return res.status(502).json({ ok: false, error: 'Servicio de noticias no configurado' });
+  }
   res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
   const now = Date.now();
   if (newsProxyCache.payload && newsProxyCache.key === query && newsProxyCache.expiresAt > now) {
@@ -223,9 +229,19 @@ app.get('/api/news', async (req, res) => {
     const payload = await resolveWithTimeout(newsProxyCache.promise, PROXY_TIMEOUT_MS, 'NewsAPI timeout');
     return res.json(payload);
   } catch (error) {
+    const detail = error?.message || 'NewsAPI proxy error';
+    if (newsProxyCache.payload) {
+      return res.json({
+        ...newsProxyCache.payload,
+        ok: true,
+        cached: true,
+        stale: true,
+        detail,
+      });
+    }
     newsProxyCache.payload = null;
     newsProxyCache.expiresAt = 0;
-    return res.status(502).json({ ok: false, error: error?.message || 'NewsAPI proxy error' });
+    return res.status(502).json({ ok: false, error: detail });
   }
 });
 
@@ -238,6 +254,10 @@ app.get('/api/images', async (req, res) => {
   const query = sanitizeQuery(req.query?.q, 'gold bullion');
   if (!query) {
     return res.status(400).json({ ok: false, error: 'Consulta vacía' });
+  }
+  if (!process.env.UNSPLASH_ACCESS_KEY) {
+    imageProxyCache.clear();
+    return res.status(502).json({ ok: false, error: 'Servicio de imágenes no configurado' });
   }
   res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
   let entry = imageProxyCache.get(query);
@@ -270,9 +290,21 @@ app.get('/api/images', async (req, res) => {
     const payload = await resolveWithTimeout(entry.promise, PROXY_TIMEOUT_MS, 'Unsplash timeout');
     return res.json(payload);
   } catch (error) {
-    entry.payload = null;
-    entry.expiresAt = 0;
-    return res.status(502).json({ ok: false, error: error?.message || 'Unsplash proxy error' });
+    const detail = error?.message || 'Unsplash proxy error';
+    if (entry?.payload) {
+      return res.json({
+        ...entry.payload,
+        ok: true,
+        cached: true,
+        stale: true,
+        detail,
+      });
+    }
+    if (entry) {
+      entry.payload = null;
+      entry.expiresAt = 0;
+    }
+    return res.status(502).json({ ok: false, error: detail });
   }
 });
 

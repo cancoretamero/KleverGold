@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 'use client';
 
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -113,6 +113,9 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
     return days;
   }, [lastCsvDate, yesterday, iso]);
 
+  const gapsSignature = useMemo(() => gapsToYesterday.join('|'), [gapsToYesterday]);
+  const autoFillRef = useRef('');
+
   // Puede el padre pedir los días faltantes
   const canFetch = typeof fetchMissingDaysSequential === 'function';
 
@@ -166,6 +169,14 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   useEffect(() => {
     updateNow();
   }, []);
+
+  useEffect(() => {
+    if (!canFetch) return;
+    if (!gapsSignature) return;
+    if (autoFillRef.current === gapsSignature) return;
+    autoFillRef.current = gapsSignature;
+    updateNow();
+  }, [canFetch, gapsSignature, updateNow]);
 
   // Polling para refrescar sólo el spot cada 60 segundos
   useEffect(() => {

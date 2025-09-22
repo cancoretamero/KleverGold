@@ -385,7 +385,6 @@ const fetchHistoricalRange = async (from, to) => {
       throw error;
     }
   }
-  if (!rows.length) throw new Error('Datos vacíos');
   return rows;
 };
 
@@ -408,10 +407,12 @@ app.get('/api/historical', async (req, res) => {
     from = to = iso(d);
   }
 
-  if (to >= todayIso) {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() - 1);
-    to = iso(d);
+  if (to > todayIso) {
+    to = todayIso;
+  }
+
+  if (from > todayIso) {
+    from = todayIso;
   }
 
   if (from > to) from = to;
@@ -432,9 +433,11 @@ app.get('/api/historical', async (req, res) => {
   if (!entry.promise) {
     entry.promise = (async () => {
       const rows = await fetchHistoricalRange(from, to);
-      const payload = { rows, fetchedAt: Date.now() };
+      const fetchedAt = Date.now();
+      const ttl = rows.length ? HISTORICAL_CACHE_TTL_MS : Math.min(60_000, HISTORICAL_CACHE_TTL_MS);
+      const payload = { rows, fetchedAt };
       entry.payload = payload;
-      entry.expiresAt = payload.fetchedAt + HISTORICAL_CACHE_TTL_MS;
+      entry.expiresAt = fetchedAt + ttl;
       return payload;
     })();
     entry.promise.finally(() => {

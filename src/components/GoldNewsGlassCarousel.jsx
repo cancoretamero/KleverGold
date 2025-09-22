@@ -44,6 +44,11 @@ const FALLBACK_IMAGES = [
   'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop',
   'https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1600&auto=format&fit=crop',
   'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1610375461246-83df859d849d?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1620918217746-97a7f7d5601d?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1529692236671-f1dc319b07e3?q=80&w=1600&auto=format&fit=crop',
 ];
 const EXPERT_ORDER = ['macro', 'etf', 'usd', 'cb'];
 const EXPERT_COLORS = {
@@ -481,6 +486,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
 
 function TrendBanner({ trend }) {
   if (!trend) return null;
+  const shares = dedupeShares(trend.shares);
   return (
     <div className="mt-4 rounded-3xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-indigo-100 p-4 shadow-inner">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -508,21 +514,13 @@ function TrendBanner({ trend }) {
 
       <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)]">
         <div className="space-y-2">
-          {trend.shares.length === 0 && (
+          {shares.length === 0 && (
             <div className="rounded-2xl border border-white/70 bg-white/80 p-3 text-[11px] text-indigo-700 shadow-sm">
               Señal mixta sin experto dominante.
             </div>
           )}
-          {trend.shares.map((share) => (
-            <div key={share.id} className="rounded-2xl border border-white/70 bg-white/80 p-3 shadow-sm">
-              <div className="mb-1 flex items-center justify-between text-[11px] text-indigo-700">
-                <span className="font-semibold" style={{ color: share.color }}>{share.label}</span>
-                <span className="font-semibold text-indigo-900">{formatPercent(share.share)}</span>
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100/80">
-                <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(6, share.share * 100)}%`, backgroundColor: share.color }} />
-              </div>
-            </div>
+          {shares.map((share) => (
+            <TrendShare key={share.id} share={share} />
           ))}
         </div>
 
@@ -538,6 +536,48 @@ function TrendBanner({ trend }) {
             ))}
           </div>
           <p className="mt-3 text-[10px] text-indigo-600">Secuencia reciente de expertos dominantes en las últimas publicaciones.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrendShare({ share }) {
+  const pct = Math.round(Math.max(0, Math.min(1, share.share || 0)) * 100);
+  const tooltipId = `trend-share-${share.id}`;
+  const explanation = share.explanation || 'El modelo resume la contribución de este experto como señal neutral para el oro.';
+  return (
+    <div className="rounded-2xl border border-white/70 bg-white/80 p-3 shadow-sm">
+      <div className="flex items-center justify-between text-[11px] text-indigo-700">
+        <span className="font-semibold" style={{ color: share.color }}>
+          {share.label}
+        </span>
+        <span className="font-semibold text-indigo-900">{pct}%</span>
+      </div>
+      <div className="relative mt-2 group/track">
+        <button
+          type="button"
+          aria-describedby={tooltipId}
+          className="absolute inset-0 w-full cursor-help rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
+          <span className="sr-only">Explicación de {share.label}</span>
+        </button>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-white/70 shadow-inner">
+          <div
+            className="h-full rounded-full transition-all"
+            style={{
+              width: `${pct}%`,
+              backgroundImage: `linear-gradient(90deg, ${share.color}, ${shadeColor(share.color, -18)})`,
+            }}
+          />
+        </div>
+        <div
+          id={tooltipId}
+          role="tooltip"
+          className="pointer-events-none absolute left-0 top-full z-20 mt-3 hidden w-full max-w-sm rounded-2xl border border-white/70 bg-white/80 p-3 text-[11px] text-indigo-700 shadow-xl backdrop-blur group-hover/track:block group-focus-within/track:block"
+        >
+          <p className="text-[11px] font-semibold text-indigo-900">{share.label}</p>
+          <p className="mt-1 leading-relaxed text-indigo-800">{explanation}</p>
         </div>
       </div>
     </div>
@@ -1060,8 +1100,9 @@ function useDebouncedValue(value, delay = 250) {
 }
 
 async function fetchAndAggregate(signal) {
+  const baseQuery = 'gold price OR gold market';
   const results = await Promise.allSettled([
-    fetchWithBackoff('/api/news?q=gold%20price%20OR%20gold%20market', { signal }),
+    fetchWithBackoff(`/api/news?q=${encodeURIComponent(baseQuery)}`, { signal }),
     fetchWithBackoff('/.netlify/functions/news-feed', { signal }),
   ]);
 
@@ -1074,7 +1115,9 @@ async function fetchAndAggregate(signal) {
     for (const item of newsApiRes.value.items) {
       items.push({ ...item, origin: 'newsapi' });
     }
-    if (Array.isArray(newsApiRes.value.failures)) failures.push(...newsApiRes.value.failures);
+    if (Array.isArray(newsApiRes.value.failures)) {
+      failures.push(...newsApiRes.value.failures.filter((entry) => entry && (entry.error || entry.detail || entry.message)));
+    }
   } else if (newsApiRes.status === 'rejected') {
     failures.push({ source: 'newsapi', error: newsApiRes.reason?.message || String(newsApiRes.reason || 'Error NewsAPI') });
   }
@@ -1083,9 +1126,34 @@ async function fetchAndAggregate(signal) {
     for (const item of openFeedRes.value.items) {
       items.push({ ...item, origin: 'open-feed' });
     }
-    if (Array.isArray(openFeedRes.value.failures)) failures.push(...openFeedRes.value.failures);
+    if (Array.isArray(openFeedRes.value.failures)) {
+      failures.push(...openFeedRes.value.failures.filter((entry) => entry && (entry.error || entry.detail || entry.message)));
+    }
   } else if (openFeedRes.status === 'rejected') {
     failures.push({ source: 'open-feed', error: openFeedRes.reason?.message || String(openFeedRes.reason || 'Error feed abierto') });
+  }
+
+  if (items.length < 10) {
+    const supplementalQueries = [
+      'central bank gold reserves',
+      'gold etf flows outlook',
+      'gold dollar inflation hedge',
+    ];
+    for (const query of supplementalQueries) {
+      if (signal?.aborted) break;
+      try {
+        const payload = await fetchWithBackoff(`/api/news?q=${encodeURIComponent(query)}`, { signal, attempts: 1, baseDelay: 500 });
+        const extraItems = Array.isArray(payload?.items) ? payload.items : [];
+        if (extraItems.length) {
+          extraItems.forEach((item) => {
+            items.push({ ...item, origin: `newsapi:${query}` });
+          });
+        }
+      } catch (error) {
+        console.warn('[GoldNews] Supplemental query failed', query, error);
+      }
+      if (items.length >= 18) break;
+    }
   }
 
   return { items, failures };
@@ -1454,40 +1522,55 @@ async function scoreWithMoE(items, signal) {
 
 async function enrichImages(items, signal, cache) {
   if (!items.length) return items;
+  const usedImages = new Set();
+  const fallbackPool = FALLBACK_IMAGES.map((url) => ({ url, credit: 'Orion Visual AI' }));
   return runWithConcurrency(
     items,
     3,
     async (item) => {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const assignUnique = (base, candidates = []) => {
+        const merged = candidates.slice();
+        if (base.image) {
+          merged.push({ url: base.image, credit: base.imageAttribution || null });
+        }
+        const chosen = selectImageCandidate(merged, base, usedImages);
+        if (chosen) {
+          usedImages.add(chosen.url);
+          return { ...base, image: chosen.url, imageAttribution: chosen.credit || base.imageAttribution || null };
+        }
+        const fallback = selectFallbackImage(base, usedImages, fallbackPool);
+        if (fallback) {
+          usedImages.add(fallback.url);
+          return { ...base, image: fallback.url, imageAttribution: fallback.credit || base.imageAttribution || null };
+        }
+        if (base.image && !usedImages.has(base.image)) {
+          usedImages.add(base.image);
+        }
+        return base;
+      };
+
       const query = buildImageQuery(item);
-      if (!query) return item;
+      if (!query) {
+        return assignUnique(item);
+      }
       const cached = cache.get(query);
       const now = Date.now();
       if (cached && cached.expiresAt > now) {
-        const fromCache = selectImageCandidate(cached.candidates, item);
-        if (fromCache) {
-          return { ...item, image: fromCache.url, imageAttribution: fromCache.credit || item.imageAttribution || null };
-        }
+        return assignUnique(item, cached.candidates || []);
       }
       try {
         const response = await fetchWithBackoff(`/api/images?q=${encodeURIComponent(query)}`, { signal, attempts: 1, baseDelay: 400 });
         const candidates = extractImageCandidates(response);
         if (candidates.length) {
           cache.set(query, { candidates, expiresAt: now + CACHE_TTL_MS / 2 });
-          const chosen = selectImageCandidate(candidates, item);
-          if (chosen) {
-            return { ...item, image: chosen.url, imageAttribution: chosen.credit || null };
-          }
+          return assignUnique(item, candidates);
         }
       } catch (error) {
         console.warn('[GoldNews] Unsplash fallback', error);
       }
-      const fallbackCandidates = [];
-      if (item.image) {
-        fallbackCandidates.push({ url: item.image, credit: item.imageAttribution || null });
-      }
-      cache.set(query, { candidates: fallbackCandidates, expiresAt: now + 60_000 });
-      return item;
+      cache.set(query, { candidates: [], expiresAt: now + 60_000 });
+      return assignUnique(item);
     },
     signal,
   );
@@ -1514,7 +1597,27 @@ function postProcessNews(items) {
     return a.id.localeCompare(b.id);
   });
   const trend = computeTrend(items);
-  return { clusters, trend };
+  return { clusters: ensureUniqueClusterImages(clusters), trend };
+}
+
+function ensureUniqueClusterImages(clusters = []) {
+  if (!clusters.length) return clusters;
+  const used = new Set();
+  const fallbackPool = FALLBACK_IMAGES.map((url) => ({ url, credit: 'Orion Visual AI' }));
+  return clusters.map((item) => {
+    if (!item) return item;
+    const current = item.image;
+    if (current && !used.has(current)) {
+      used.add(current);
+      return item;
+    }
+    const fallback = selectFallbackImage(item, used, fallbackPool);
+    if (fallback) {
+      used.add(fallback.url);
+      return { ...item, image: fallback.url, imageAttribution: fallback.credit || item.imageAttribution || null };
+    }
+    return item;
+  });
 }
 
 function dedupeSemantic(items) {
@@ -1644,6 +1747,7 @@ function computeTrend(items) {
     label: entry.label,
     share: entry.weight / totalWeight,
     color: colorForExpert(entry.id),
+    explanation: explainExpertShare(entry.id, entry.weight / totalWeight, items),
   }));
   const narrative = sorted[0]
     ? `El gating de Orion asigna ${formatPercent(sorted[0].weight / totalWeight)} a ${sorted[0].label}, con ${sorted[1] ? `${formatPercent(sorted[1].weight / totalWeight)} para ${sorted[1].label}` : 'señales menores en el resto'}.`
@@ -1675,6 +1779,92 @@ function labelForExpert(id) {
 
 function colorForExpert(id) {
   return EXPERT_COLORS[id] || EXPERT_COLORS.mix;
+}
+
+function dedupeShares(shares = []) {
+  const seen = new Set();
+  return shares.filter((share) => {
+    if (!share || !share.id || seen.has(share.id) || !(share.share > 0)) return false;
+    seen.add(share.id);
+    return true;
+  });
+}
+
+function explainExpertShare(expertId, share, items) {
+  const relevant = items
+    .filter((item) => Array.isArray(item.experts) && item.experts.some((expert) => expert.id === expertId))
+    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0));
+  const keywords = new Set();
+  relevant.slice(0, 4).forEach((item) => {
+    (item.keywords || []).slice(0, 2).forEach((keyword) => keywords.add(keyword));
+  });
+  const keywordsText = keywords.size ? ` Destacan términos como ${listify(Array.from(keywords).slice(0, 3))}.` : '';
+  const directionText = directionFromSignals(relevant);
+  const base = `${labelForExpert(expertId)} concentra ${formatPercent(share)} del análisis porque ${shareBaseReason(expertId)}.`;
+  return `${base}${keywordsText} ${directionText}`.replace(/\s+/g, ' ').trim();
+}
+
+function shareBaseReason(expertId) {
+  switch (expertId) {
+    case 'macro':
+      return 'las noticias giran alrededor de tipos de interés, inflación y señales de la Fed';
+    case 'etf':
+      return 'varias notas mencionan flujos de ETF, demanda de inversión y posiciones de fondos';
+    case 'usd':
+      return 'los titulares se enfocan en la fortaleza o debilidad del dólar frente a otras divisas';
+    case 'cb':
+      return 'aparecen compras, ventas o acumulación de reservas por parte de bancos centrales';
+    default:
+      return 'se combinan señales generales del mercado del oro';
+  }
+}
+
+function directionFromSignals(items) {
+  if (!items.length) return 'El efecto esperado es neutral para el precio del oro.';
+  let total = 0;
+  let score = 0;
+  items.forEach((item) => {
+    const sentiment = sentimentWeight(item.sentiment);
+    if (!Number.isFinite(sentiment)) return;
+    const baseWeight = Math.max(0.1, (item.relevance ?? 0.4) + (item.confidence ?? 0.3));
+    const impactBoost = item.impactLevel === 'alto' ? 1.3 : item.impactLevel === 'bajo' ? 0.8 : 1;
+    const finalWeight = baseWeight * impactBoost;
+    total += finalWeight;
+    score += finalWeight * sentiment;
+  });
+  if (!total) return 'El efecto esperado es neutral para el precio del oro.';
+  const normalized = score / total;
+  if (normalized >= 0.18) return 'En conjunto, la señal favorece un sesgo alcista para el oro.';
+  if (normalized <= -0.18) return 'En conjunto, la señal apunta a presión bajista sobre el oro.';
+  return 'En conjunto, la señal se mantiene neutral para el oro.';
+}
+
+function sentimentWeight(value) {
+  if (!value) return 0;
+  const normalized = String(value).toLowerCase();
+  if (normalized.includes('bull')) return 1;
+  if (normalized.includes('bear')) return -1;
+  return 0;
+}
+
+function listify(words) {
+  if (!Array.isArray(words) || words.length === 0) return '';
+  if (words.length === 1) return words[0];
+  if (words.length === 2) return `${words[0]} y ${words[1]}`;
+  return `${words.slice(0, -1).join(', ')} y ${words[words.length - 1]}`;
+}
+
+function shadeColor(color, percent = 0) {
+  const baseColor = typeof color === 'string' && color ? color : '#6366F1';
+  const hex = baseColor.replace('#', '');
+  if (hex.length !== 6) return baseColor;
+  const amt = Math.round((percent / 100) * 255);
+  const toHex = (value) => value.toString(16).padStart(2, '0');
+  const clamp = (value) => Math.max(0, Math.min(255, value));
+  const r = clamp(parseInt(hex.slice(0, 2), 16) + amt);
+  const g = clamp(parseInt(hex.slice(2, 4), 16) + amt);
+  const b = clamp(parseInt(hex.slice(4, 6), 16) + amt);
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 function calcConfidenceAlpha(confidence = 0.5, sentimentScore = 0.5) {
@@ -1834,14 +2024,29 @@ function extractImageCandidates(response) {
     .filter((entry) => !!entry.url);
 }
 
-function selectImageCandidate(candidates = [], item) {
+function selectImageCandidate(candidates = [], item, usedSet) {
   const pool = candidates.filter((candidate) => candidate?.url);
-  if (item.image && !pool.some((candidate) => candidate.url === item.image)) {
-    pool.push({ url: item.image, credit: item.imageAttribution || null });
-  }
   if (!pool.length) return null;
-  const index = hashToIndex(item.id || item.dedupKey || item.title || '', pool.length);
-  return pool[index];
+  const startIndex = hashToIndex(item.id || item.dedupKey || item.title || '', pool.length);
+  for (let offset = 0; offset < pool.length; offset += 1) {
+    const candidate = pool[(startIndex + offset) % pool.length];
+    if (!usedSet || !usedSet.has(candidate.url)) {
+      return candidate;
+    }
+  }
+  return pool[startIndex];
+}
+
+function selectFallbackImage(item, usedSet, fallbackPool) {
+  if (!fallbackPool.length) return null;
+  const start = hashToIndex(item.id || item.dedupKey || item.title || '', fallbackPool.length);
+  for (let offset = 0; offset < fallbackPool.length; offset += 1) {
+    const candidate = fallbackPool[(start + offset) % fallbackPool.length];
+    if (!usedSet.has(candidate.url)) {
+      return candidate;
+    }
+  }
+  return fallbackPool[start];
 }
 
 function hashToIndex(value, modulo) {
@@ -1856,6 +2061,8 @@ function hashToIndex(value, modulo) {
 
 function failureSourceLabel(entry) {
   if (!entry) return '';
+  const hasError = Boolean(entry.error || entry.detail || entry.message || entry.status === 'error');
+  if (!hasError) return '';
   const label = sanitizeText(entry.name || entry.source || entry.provider || '');
   if (label) return label;
   if (entry.error) {

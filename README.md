@@ -89,3 +89,12 @@ por:
 ## Nota Netlify / Vite
 Si más adelante añades `package-lock.json`, puedes volver a `npm ci && npm run build` en `netlify.toml`.
 Asegúrate de tener `public/config.js` presente para que `<script src="/config.js" defer></script>` lo sirva estáticamente.
+
+## Variables de entorno necesarias
+
+El backend Express y los helpers de `src/utils` ya no incluyen claves embebidas para los servicios externos. Antes de ejecutar el servidor local (`npm run dev` en `server`) o desplegar en plataformas como Render/Netlify, define estas variables de entorno:
+
+- `NEWS_API_KEY`: clave de [NewsAPI](https://newsapi.org/) para obtener titulares relacionados con el oro.
+- `UNSPLASH_ACCESS_KEY`: clave pública de [Unsplash](https://unsplash.com/developers) para buscar imágenes.
+
+Los archivos de ejemplo `.env` (`env.builds`, `env.functions`) incluyen las variables vacías para que añadas los valores correctos en tu entorno seguro. Si alguna de estas claves falta en tiempo de ejecución, las rutas `/api/news` y `/api/images` responderán con un HTTP 502 indicando que el servicio no está configurado.

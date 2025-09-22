@@ -5,9 +5,16 @@
  * (Licencia MIT para el modelo FinBERT).
  */
 
-import * as transformers from '@xenova/transformers';
-
 let classifierPromise = null;
+let transformersPromise = null;
+
+async function loadTransformers() {
+  if (!transformersPromise) {
+    transformersPromise = import('@xenova/transformers')
+      .then((mod) => (mod && mod.pipeline ? mod : mod?.default || mod));
+  }
+  return transformersPromise;
+}
 
 /**
  * Obtiene o crea el clasificador FinBERT.
@@ -15,6 +22,7 @@ let classifierPromise = null;
 async function getClassifier() {
   if (!classifierPromise) {
     classifierPromise = (async () => {
+      const transformers = await loadTransformers();
       try {
         const pipeline = await transformers.pipeline('text-classification', 'ProsusAI/finbert');
         return pipeline;

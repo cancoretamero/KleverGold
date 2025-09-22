@@ -4,6 +4,8 @@ import cors from 'cors';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { fetchGoldNews } from '../src/utils/newsApi.js';
+import { searchUnsplashImages } from '../src/utils/unsplash.js';
 
 // Configuración por variables de entorno
 const PORT = process.env.PORT || 8080;
@@ -55,6 +57,18 @@ const goldApiClient = axios.create(axiosConfig);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function resolveWithTimeout(promise, timeoutMs, label) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(label || 'timeout')), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 let goldApiQueue = Promise.resolve();
 let lastGoldApiCallTs = 0;
 
@@ -91,6 +105,30 @@ const spotCache = {
 
 const historicalCache = new Map();
 const historicalCacheKey = (from, to) => `${from}::${to}`;
+
+const PROXY_TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 12_000);
+const NEWS_CACHE_TTL_MS = 5 * 60_000;
+const IMAGE_CACHE_TTL_MS = 6 * 60_000;
+
+const newsProxyCache = { key: '', payload: null, expiresAt: 0, promise: null };
+const imageProxyCache = new Map();
+
+function sanitizeString(value) {
+  if (!value) return '';
+  return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeUrl(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return trimmed;
+}
+
+function sanitizeQuery(value, fallback) {
+  const cleaned = sanitizeString(value).replace(/[^a-z0-9áéíóúñ .,:%/-]+/gi, ' ').slice(0, 160).trim();
+  return cleaned || fallback;
+}
 
 function normalizeOhlc(row, defaults = {}) {
   const date = String(row?.date || defaults.date || '').slice(0, 10);
@@ -146,6 +184,97 @@ function writeMapToCsv(map, csvPath) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+/**
+ * GET /api/news?q=
+ * Proxy seguro hacia NewsAPI.
+ * Headers: Cache-Control: public, max-age=120, stale-while-revalidate=300.
+ */
+app.get('/api/news', async (req, res) => {
+  const query = sanitizeQuery(req.query?.q, 'gold price OR gold market');
+  res.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+  const now = Date.now();
+  if (newsProxyCache.payload && newsProxyCache.key === query && newsProxyCache.expiresAt > now) {
+    return res.json(newsProxyCache.payload);
+  }
+
+  if (!newsProxyCache.promise || newsProxyCache.key !== query) {
+    newsProxyCache.key = query;
+    newsProxyCache.promise = (async () => {
+      const articles = await fetchGoldNews(query, 30);
+      const items = (articles || []).slice(0, 40).map((article) => ({
+        title: sanitizeString(article.title),
+        description: sanitizeString(article.description),
+        url: sanitizeUrl(article.url),
+        publishedAt: article.publishedAt || null,
+        source: sanitizeString(article.source),
+        imageUrl: sanitizeUrl(article.imageUrl),
+      }));
+      const payload = { ok: true, items, failures: [] };
+      newsProxyCache.payload = payload;
+      newsProxyCache.expiresAt = Date.now() + NEWS_CACHE_TTL_MS;
+      return payload;
+    })().finally(() => {
+      newsProxyCache.promise = null;
+    });
+  }
+
+  try {
+    const payload = await resolveWithTimeout(newsProxyCache.promise, PROXY_TIMEOUT_MS, 'NewsAPI timeout');
+    return res.json(payload);
+  } catch (error) {
+    newsProxyCache.payload = null;
+    newsProxyCache.expiresAt = 0;
+    return res.status(502).json({ ok: false, error: error?.message || 'NewsAPI proxy error' });
+  }
+});
+
+/**
+ * GET /api/images?q=
+ * Proxy seguro hacia Unsplash.
+ * Headers: Cache-Control: public, max-age=300, stale-while-revalidate=600.
+ */
+app.get('/api/images', async (req, res) => {
+  const query = sanitizeQuery(req.query?.q, 'gold bullion');
+  if (!query) {
+    return res.status(400).json({ ok: false, error: 'Consulta vacía' });
+  }
+  res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+  let entry = imageProxyCache.get(query);
+  const now = Date.now();
+  if (!entry) {
+    entry = { payload: null, expiresAt: 0, promise: null };
+    imageProxyCache.set(query, entry);
+  }
+  if (entry.payload && entry.expiresAt > now) {
+    return res.json(entry.payload);
+  }
+  if (!entry.promise) {
+    entry.promise = (async () => {
+      const images = await searchUnsplashImages(query, 4);
+      const items = (images || []).slice(0, 4).map((image) => ({
+        url: sanitizeUrl(image.url),
+        thumbnail: sanitizeUrl(image.thumbnail),
+        alt: sanitizeString(image.alt),
+        credit: image.author ? `${image.author} · Unsplash` : 'Unsplash',
+      }));
+      const payload = { ok: true, items };
+      entry.payload = payload;
+      entry.expiresAt = Date.now() + IMAGE_CACHE_TTL_MS;
+      return payload;
+    })().finally(() => {
+      entry.promise = null;
+    });
+  }
+  try {
+    const payload = await resolveWithTimeout(entry.promise, PROXY_TIMEOUT_MS, 'Unsplash timeout');
+    return res.json(payload);
+  } catch (error) {
+    entry.payload = null;
+    entry.expiresAt = 0;
+    return res.status(502).json({ ok: false, error: error?.message || 'Unsplash proxy error' });
+  }
+});
 
 /**
  * GET /api/spot

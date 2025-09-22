@@ -166,7 +166,7 @@ exports.handler = async (event) => {
   );
 
   if (!aggregated.length) {
-    return H.json(502, { ok: false, error: 'Sin datos disponibles', failures });
+     return H.json(200, { items: [], failures });
   }
 
   const map = new Map();

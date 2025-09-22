@@ -1,7 +1,14 @@
 import fetch from 'node-fetch';
 
-const API_KEY = process.env.NEWS_API_KEY || 'b7376a8668cf442585efad67279e57a4';
 const NEWS_ENDPOINT = 'https://newsapi.org/v2/everything';
+
+function resolveNewsApiKey() {
+  const apiKey = process.env.NEWS_API_KEY;
+  if (!apiKey) {
+    throw new Error('NEWS_API_KEY environment variable is not set');
+  }
+  return apiKey;
+}
 
 /**
  * Fetches recent gold‑related news articles from the NewsAPI.
@@ -11,12 +18,13 @@ const NEWS_ENDPOINT = 'https://newsapi.org/v2/everything';
  * @returns {Promise<Array>} - A promise that resolves to an array of article objects.
  */
 export async function fetchGoldNews(query = 'gold price OR gold market', pageSize = 20) {
+  const apiKey = resolveNewsApiKey();
   const params = new URLSearchParams({
     q: query,
     sortBy: 'publishedAt',
     language: 'en',
     pageSize: String(pageSize),
-    apiKey: API_KEY
+    apiKey
   });
   const url = `${NEWS_ENDPOINT}?${params.toString()}`;
   const response = await fetch(url);

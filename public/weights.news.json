@@ -1,0 +1,26 @@
+{
+  "relevance": {
+    "macro": {"scale": 1.2},
+    "etf": {"scale": 1.1},
+    "usd": {"scale": 1.0},
+    "cb": {"scale": 0.9}
+  },
+  "impact": {
+    "macro": {"scale": 1.3},
+    "etf": {"scale": 1.0},
+    "usd": {"scale": 0.8},
+    "cb": {"scale": 1.1}
+  },
+  "bias": {
+    "macro": {"scale": 1.0},
+    "etf": {"scale": 1.0},
+    "usd": {"scale": 1.0},
+    "cb": {"scale": 1.0}
+  },
+  "confidence": {
+    "macro": {"scale": 1.0},
+    "etf": {"scale": 1.0},
+    "usd": {"scale": 1.0},
+    "cb": {"scale": 1.0}
+  }
+}

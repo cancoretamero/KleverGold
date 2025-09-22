@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react'
+import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Brush, ReferenceLine } from 'recharts'
 import { Upload, Calendar, TrendingUp, Maximize2, Gauge, RefreshCcw, Database, CloudDownload } from "lucide-react"
 import CandleChart from './CandleChart.jsx'
@@ -7,7 +7,7 @@ import TopTable from './TopTable.jsx'
 import CsvLoader from './CsvLoader.jsx'
 import { CONFIG } from '../config.js'
 import { aggregateOhlc, enumerateDays, quantile, loadCsvFromUrl } from '../utils.js'
-import { fetchMissingDaysSequential, fetchMissingDaysOptimized, persistRowsToRepo } from '../api.js'
+import { fetchMissingDaysOptimized, persistRowsToRepo } from '../api.js'
 import { loadExtraFromLS, saveExtraToLS, mapByDate, rowsFromMap } from '../storage.js'
 
 // Nuevos widgets recientes del repo (mantener)
@@ -30,6 +30,7 @@ export default function GoldCsvDashboard() {
   const [mode, setMode] = useState("candlestick") // candlestick | ohlc | area
   const [loadingBase, setLoadingBase] = useState(false)
   const [filling, setFilling] = useState(false)
+  const autoFillRef = useRef('')
 
   // Estudio anual/mensual
   const [selectedYears, setSelectedYears] = useState([])
@@ -82,6 +83,58 @@ export default function GoldCsvDashboard() {
     for (const r of extraRows) m.set(r.date.toISOString().slice(0, 10), r)
     return rowsFromMap(m)
   }, [baseRows, extraRows])
+
+  const missingToToday = useMemo(() => {
+    if (!rows.length) return []
+    const last = rows[rows.length - 1]?.date
+    if (!(last instanceof Date)) return []
+    const todayIso = new Date().toISOString().slice(0, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(todayIso)) return []
+    const target = new Date(`${todayIso}T00:00:00Z`)
+    if (+last >= +target) return []
+    const out = []
+    for (
+      let cursor = new Date(last.getTime() + 86400000);
+      cursor <= target;
+      cursor = new Date(cursor.getTime() + 86400000)
+    ) {
+      out.push(cursor.toISOString().slice(0, 10))
+    }
+    return out
+  }, [rows])
+
+  const fetchLatestRows = useCallback(
+    async (datesMaybe = [], options = {}) => {
+      const { force = false } = options ?? {}
+      const pool = Array.isArray(datesMaybe) && datesMaybe.length ? datesMaybe : missingToToday
+      const normalized = Array.from(new Set(pool.map((d) => String(d).slice(0, 10))))
+        .filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v))
+        .sort()
+      if (!normalized.length) {
+        if (force) autoFillRef.current = ''
+        return []
+      }
+      const signature = normalized.join('|')
+      if (!force && autoFillRef.current === signature) return []
+      autoFillRef.current = signature
+      try {
+        const rowsNew = await fetchMissingDaysOptimized(normalized)
+        if (rowsNew?.length) {
+          onAppendRows(rowsNew)
+        }
+        return rowsNew || []
+      } catch (err) {
+        if (autoFillRef.current === signature) autoFillRef.current = ''
+        throw err
+      }
+    },
+    [missingToToday, onAppendRows, fetchMissingDaysOptimized]
+  )
+
+  useEffect(() => {
+    if (!missingToToday.length) return
+    fetchLatestRows().catch(() => {})
+  }, [missingToToday, fetchLatestRows])
 
   // 3) Metadatos
   const meta = useMemo(() => {
@@ -222,13 +275,11 @@ export default function GoldCsvDashboard() {
     if (!gaps.length) return
     setFilling(true)
     try {
-      const rowsNew = await fetchMissingDaysOptimized(gaps)
-      if (!rowsNew.length) return
-      onAppendRows(rowsNew)
+      await fetchLatestRows(gaps, { force: true })
     } finally {
       setFilling(false)
     }
-  }, [gaps, onAppendRows])
+  }, [gaps, fetchLatestRows])
 
   const needCsv = baseRows.length === 0 && !loadingBase
 
@@ -266,7 +317,7 @@ export default function GoldCsvDashboard() {
       {/* Últimos datos (usa spot/ohlc si configuras API, si no, se basa en CSV) */}
       <GoldNowSection
         rows={rows}
-        fetchMissingDaysSequential={fetchMissingDaysOptimized}
+        fetchMissingDaysSequential={fetchLatestRows}
         onAppendRows={onAppendRows}
       />
 

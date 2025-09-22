@@ -58,6 +58,7 @@ const EXPERT_COLORS = {
   cb: '#F97316',
   mix: '#94A3B8',
 };
+const MAX_NEWS_STALENESS_MS = 36 * 60 * 60 * 1000;
 
 export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   const [news, setNews] = useState(items ?? []);
@@ -83,18 +84,36 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   const isLoading = status === 'loading';
   const isError = status === 'error';
   const isEmpty = status === 'empty';
-  const failureSources = useMemo(() => {
+  const incidentSources = useMemo(() => {
     if (!failures.length) return [];
+    const resolved = new Set();
+    const trackResolved = (item) => {
+      if (!item) return;
+      const origin = String(item.origin || '').toLowerCase();
+      if (origin.startsWith('newsapi')) resolved.add('newsapi');
+      if (item.sourceId) resolved.add(String(item.sourceId).toLowerCase());
+      if (Array.isArray(item.stack)) {
+        item.stack.forEach((variant) => {
+          if (!variant) return;
+          const variantOrigin = String(variant.origin || '').toLowerCase();
+          if (variantOrigin.startsWith('newsapi')) resolved.add('newsapi');
+          if (variant.sourceId) resolved.add(String(variant.sourceId).toLowerCase());
+        });
+      }
+    };
+    news.forEach(trackResolved);
     const ordered = [];
     const seen = new Set();
     failures.forEach((entry) => {
+      const id = failureSourceId(entry);
+      if (id && resolved.has(id)) return;
       const label = failureSourceLabel(entry);
       if (!label || seen.has(label)) return;
       seen.add(label);
       ordered.push(label);
     });
     return ordered;
-  }, [failures]);
+  }, [failures, news]);
 
   const filteredItems = useMemo(() => {
     if (!news.length) return [];
@@ -379,11 +398,11 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
           onSearchChange={handleSearchChange}
         />
 
-        {failureSources.length > 0 && (
+        {incidentSources.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-amber-100 bg-amber-50/80 p-3 text-[11px] text-amber-700">
             <span className="font-semibold uppercase tracking-[0.18em] text-amber-600">Fuentes con incidencias</span>
             <div className="flex flex-wrap gap-1">
-              {failureSources.map((name) => (
+              {incidentSources.map((name) => (
                 <span key={name} className="rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold text-amber-700 shadow-sm">
                   {name}
                 </span>
@@ -525,17 +544,8 @@ function TrendBanner({ trend }) {
         </div>
 
         <div className="flex flex-col justify-between">
-          <div className="h-3 overflow-hidden rounded-full bg-white/70 shadow-inner">
-            {trend.sequence.map((segment) => (
-              <div
-                key={segment.key}
-                title={`${segment.label}: ${formatPercent(segment.share)}`}
-                style={{ width: `${Math.max(3, segment.share * 100)}%`, backgroundColor: `${segment.background}` }}
-                className="h-full"
-              />
-            ))}
-          </div>
-          <p className="mt-3 text-[10px] text-indigo-600">Secuencia reciente de expertos dominantes en las últimas publicaciones.</p>
+          <TrendSequence sequence={trend.sequence} />
+          <p className="text-[10px] text-indigo-600">Secuencia reciente de expertos dominantes en las últimas publicaciones.</p>
         </div>
       </div>
     </div>
@@ -554,7 +564,7 @@ function TrendShare({ share }) {
         </span>
         <span className="font-semibold text-indigo-900">{pct}%</span>
       </div>
-      <div className="relative mt-2 group/track">
+      <div className="relative mt-2 -mx-1 group/track">
         <button
           type="button"
           aria-describedby={tooltipId}
@@ -562,7 +572,7 @@ function TrendShare({ share }) {
         >
           <span className="sr-only">Explicación de {share.label}</span>
         </button>
-        <div className="h-2 w-full overflow-hidden rounded-full bg-white/70 shadow-inner">
+        <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-gradient-to-r from-indigo-100/80 via-white to-indigo-50/60 shadow-inner ring-1 ring-indigo-100/60">
           <div
             className="h-full rounded-full transition-all"
             style={{
@@ -570,6 +580,9 @@ function TrendShare({ share }) {
               backgroundImage: `linear-gradient(90deg, ${share.color}, ${shadeColor(share.color, -18)})`,
             }}
           />
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-indigo-900">
+            {formatPercent(share.share)}
+          </span>
         </div>
         <div
           id={tooltipId}
@@ -579,6 +592,51 @@ function TrendShare({ share }) {
           <p className="text-[11px] font-semibold text-indigo-900">{share.label}</p>
           <p className="mt-1 leading-relaxed text-indigo-800">{explanation}</p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TrendSequence({ sequence = [] }) {
+  if (!Array.isArray(sequence) || !sequence.length) {
+    return (
+      <div className="flex h-2.5 w-full items-center rounded-full bg-gradient-to-r from-indigo-50 to-white/80 shadow-inner ring-1 ring-indigo-100/60" />
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="relative overflow-hidden rounded-full bg-gradient-to-r from-white via-indigo-50/60 to-white shadow-inner ring-1 ring-indigo-100/70">
+        <div className="flex h-2.5 w-full">
+          {sequence.map((segment, index) => {
+            const widthPct = Math.max(0, Math.min(100, (segment.share || 0) * 100));
+            return (
+              <div
+                key={segment.key || `${segment.id}-${index}`}
+                className="group relative h-full"
+                style={{
+                  width: `${widthPct}%`,
+                  minWidth: segment.share > 0 ? '6px' : '0',
+                }}
+                title={`${segment.label}: ${formatPercent(segment.share)}`}
+                aria-label={`${segment.label}: ${formatPercent(segment.share)}`}
+              >
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    backgroundImage: `linear-gradient(90deg, ${segment.background}, ${shadeColor(segment.background, -16)})`,
+                  }}
+                />
+                <span className="pointer-events-none absolute inset-x-0 bottom-full hidden translate-y-[-6px] text-center text-[10px] font-semibold text-indigo-900 drop-shadow group-hover:block">
+                  {segment.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.14em] text-indigo-500">
+        <span>Corriente de expertos</span>
+        <span>{sequence.length} eventos</span>
       </div>
     </div>
   );
@@ -1317,9 +1375,13 @@ async function orchestrateEnrichment(rawItems, signal, imageCache) {
 
 function normalizeAndDedup(items) {
   const map = new Map();
+  const now = Date.now();
   for (const raw of items) {
     const normalized = normalizeArticle(raw);
     if (!normalized) continue;
+    if (normalized.publishedAtMs && now - normalized.publishedAtMs > MAX_NEWS_STALENESS_MS) {
+      continue;
+    }
     const key = normalized.dedupKey;
     const existing = map.get(key);
     if (!existing) {
@@ -1340,6 +1402,7 @@ function normalizeArticle(item) {
   const sourceCategory = sanitizeText(item.sourceCategory || item.category || item.section);
   const sourceLogo = sanitizeText(item.sourceLogo || item.logo || null);
   const sourceSite = sanitizeText(item.sourceSite || item.site || null);
+  const sourceId = sanitizeText(item.sourceId || item.source_id || item.originId || item.providerId);
   const imageHint = sanitizeText(item.image || item.imageUrl || item.urlToImage || item.enclosure?.url || item.media?.url);
   const { ms: publishedAtMs, iso: publishedAtIso } = parsePublishedDate(item.publishedAtIso || item.publishedAt || item.pubDate || item.date);
   const dedupKey = stableHash(`${title.toLowerCase()}::${formatDomain(link || sourceSite || source)}`);
@@ -1352,6 +1415,7 @@ function normalizeArticle(item) {
     content: sanitizeText(item.content),
     link: link || null,
     source,
+    sourceId,
     sourceCategory,
     sourceLogo,
     sourceSite,
@@ -2067,6 +2131,16 @@ function failureSourceLabel(entry) {
   if (label) return label;
   if (entry.error) {
     return sanitizeText(String(entry.error).split(':')[0]);
+  }
+  return '';
+}
+
+function failureSourceId(entry) {
+  if (!entry) return '';
+  const candidates = [entry.source, entry.id, entry.provider, entry.name];
+  for (const candidate of candidates) {
+    const cleaned = sanitizeText(candidate);
+    if (cleaned) return cleaned.toLowerCase();
   }
   return '';
 }

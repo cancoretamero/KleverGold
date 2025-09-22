@@ -30,7 +30,13 @@ export default function GoldCsvDashboard() {
   const [mode, setMode] = useState("candlestick") // candlestick | ohlc | area
   const [loadingBase, setLoadingBase] = useState(false)
   const [filling, setFilling] = useState(false)
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const autoFillRef = useRef('')
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   // Estudio anual/mensual
   const [selectedYears, setSelectedYears] = useState([])
@@ -88,7 +94,7 @@ export default function GoldCsvDashboard() {
     if (!rows.length) return []
     const last = rows[rows.length - 1]?.date
     if (!(last instanceof Date)) return []
-    const todayIso = new Date().toISOString().slice(0, 10)
+    const todayIso = new Date(nowTick).toISOString().slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(todayIso)) return []
     const target = new Date(`${todayIso}T00:00:00Z`)
     if (+last >= +target) return []
@@ -101,7 +107,7 @@ export default function GoldCsvDashboard() {
       out.push(cursor.toISOString().slice(0, 10))
     }
     return out
-  }, [rows])
+  }, [rows, nowTick])
 
   const fetchLatestRows = useCallback(
     async (datesMaybe = [], options = {}) => {
@@ -134,6 +140,14 @@ export default function GoldCsvDashboard() {
   useEffect(() => {
     if (!missingToToday.length) return
     fetchLatestRows().catch(() => {})
+  }, [missingToToday, fetchLatestRows])
+
+  useEffect(() => {
+    if (!missingToToday.length) return
+    const id = setInterval(() => {
+      fetchLatestRows([], { force: true }).catch(() => {})
+    }, 60_000)
+    return () => clearInterval(id)
   }, [missingToToday, fetchLatestRows])
 
   // 3) Metadatos

@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 'use client';
 
-import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -43,6 +43,7 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [lastFetchedAt, setLastFetchedAt] = useState(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   // Estado para el precio spot
   const [spot, setSpot] = useState(null);
   const [spotTs, setSpotTs] = useState(null);
@@ -50,10 +51,18 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   const [spotAsk, setSpotAsk] = useState(null);
   const [spotErr, setSpotErr] = useState('');
 
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // Formatea un Date a ISO (YYYY‑MM‑DD)
   const iso = useCallback((d) => d.toISOString().slice(0, 10), []);
   // Hoy a medianoche UTC
-  const today = useMemo(() => new Date(new Date().toISOString().slice(0, 10)), []);
+  const today = useMemo(() => {
+    const isoToday = new Date(nowTick).toISOString().slice(0, 10);
+    return new Date(`${isoToday}T00:00:00Z`);
+  }, [nowTick]);
 
   // Ordenar las filas entrantes por fecha ascendente
   const ordered = useMemo(() => (rows || []).slice().sort((a, b) => +a.date - +b.date), [rows]);
@@ -108,7 +117,6 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   }, [lastCsvDate, today, iso]);
 
   const gapsSignature = useMemo(() => gapsToToday.join('|'), [gapsToToday]);
-  const autoFillRef = useRef('');
 
   // Puede el padre pedir los días faltantes
   const canFetch = typeof fetchMissingDaysSequential === 'function';
@@ -160,6 +168,19 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
     }
   }, [refreshSpot, canFetch, gapsToToday, onAppendRows, fetchMissingDaysSequential]);
 
+  const silentFill = useCallback(async () => {
+    if (!canFetch || !gapsToToday.length) return;
+    try {
+      const rowsNew = await fetchMissingDaysSequential(gapsToToday, { force: true });
+      if (rowsNew?.length && typeof onAppendRows === 'function') {
+        onAppendRows(rowsNew);
+        setLastFetchedAt(new Date());
+      }
+    } catch (e) {
+      // se reintenta en la siguiente pasada
+    }
+  }, [canFetch, gapsToToday, fetchMissingDaysSequential, onAppendRows]);
+
   // Al montar el componente: refrescar spot y rellenar huecos si procede
   useEffect(() => {
     updateNow();
@@ -168,10 +189,9 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
   useEffect(() => {
     if (!canFetch) return;
     if (!gapsSignature) return;
-    if (autoFillRef.current === gapsSignature) return;
-    autoFillRef.current = gapsSignature;
+    if (!gapsToToday.length) return;
     updateNow();
-  }, [canFetch, gapsSignature, updateNow]);
+  }, [canFetch, gapsSignature, gapsToToday, updateNow]);
 
   // Polling para refrescar sólo el spot cada 60 segundos
   useEffect(() => {
@@ -180,6 +200,14 @@ export default function GoldNowSection({ rows = [], onAppendRows, fetchMissingDa
     }, 60_000);
     return () => clearInterval(id);
   }, [refreshSpot]);
+
+  useEffect(() => {
+    if (!canFetch) return;
+    const id = setInterval(() => {
+      silentFill();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [canFetch, silentFill]);
 
   // Precio a mostrar: primero spot, luego último cierre disponible
   const displayPrice = Number.isFinite(spot) ? spot : Number.isFinite(lastClose) ? lastClose : null;

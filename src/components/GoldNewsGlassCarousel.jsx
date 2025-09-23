@@ -1214,7 +1214,7 @@ async function fetchAndAggregate(signal) {
     }
   }
 
-  return { items, failures };
+  return { items, failures: sanitizeFailures(failures, items) };
 }
 
 async function fetchWithBackoff(url, { signal, attempts = MAX_RETRIES + 1, baseDelay = 600 } = {}) {
@@ -2143,6 +2143,25 @@ function failureSourceId(entry) {
     if (cleaned) return cleaned.toLowerCase();
   }
   return '';
+}
+
+function sanitizeFailures(failures, items) {
+  if (!Array.isArray(failures) || failures.length === 0) return [];
+  if (Array.isArray(items) && items.length > 0) {
+    return [];
+  }
+  const deduped = [];
+  const seen = new Set();
+  failures.forEach((entry) => {
+    if (!entry) return;
+    const label = failureSourceLabel(entry);
+    if (!label) return;
+    const id = failureSourceId(entry) || label.toLowerCase();
+    if (seen.has(id)) return;
+    seen.add(id);
+    deduped.push(entry);
+  });
+  return deduped;
 }
 
 const KEYWORD_STOPWORDS = new Set([

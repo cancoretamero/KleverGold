@@ -166,7 +166,8 @@ exports.handler = async (event) => {
   );
 
   if (!aggregated.length) {
-    return H.json(502, { ok: false, error: 'Sin datos disponibles', failures });
+    //return H.json(502, { ok: false, error: 'Sin datos disponibles', failures });
+        return H.json(200, { items: [] });
   }
 
   const map = new Map();
@@ -184,7 +185,8 @@ exports.handler = async (event) => {
     .sort((a, b) => (b.publishedAtMs || 0) - (a.publishedAtMs || 0))
     .slice(0, 60);
 
-  return H.json(200, { ok: true, items: list, failures });
+  //return H.json(200, { ok: true, items: list, failures });
+      return H.json(200, { items: list });
 };
 
 function normalizeItems(doc, src) {

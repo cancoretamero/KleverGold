@@ -11,20 +11,27 @@ function resolveNewsApiKey() {
 }
 
 /**
- * Fetches recent gold‑related news articles from the NewsAPI.
+ * Fetches recent gold-related news articles from the NewsAPI.
  *
- * @param {string} query - Search terms for the NewsAPI request (defaults to gold price and market).
+ * @param {string} query - Search terms for the NewsAPI request.
  * @param {number} pageSize - Number of articles to return (max 100).
  * @returns {Promise<Array>} - A promise that resolves to an array of article objects.
  */
-export async function fetchGoldNews(query = 'gold price OR gold market', pageSize = 20) {
+export async function fetchGoldNews(
+  query = 'gold OR bullion OR precious metal OR "gold ETF" OR "central bank"',
+  pageSize = 40
+) {
   const apiKey = resolveNewsApiKey();
+  const fromDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
   const params = new URLSearchParams({
     q: query,
+    from: fromDate,
     sortBy: 'publishedAt',
     language: 'en',
     pageSize: String(pageSize),
-    apiKey
+    apiKey,
   });
   const url = `${NEWS_ENDPOINT}?${params.toString()}`;
   const response = await fetch(url);
@@ -38,6 +45,6 @@ export async function fetchGoldNews(query = 'gold price OR gold market', pageSiz
     url: article.url,
     publishedAt: article.publishedAt,
     source: article.source?.name || '',
-    imageUrl: article.urlToImage || null
+    imageUrl: article.urlToImage || null,
   }));
 }

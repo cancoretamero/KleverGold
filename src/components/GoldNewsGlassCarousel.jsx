@@ -26,6 +26,7 @@ import { scoreNewsItems } from '../utils/newsMoE.js';
 import { summarize } from '../utils/newsSummarizer.js';
 import { classifyBias } from '../utils/newsBias.js';
 import { classifySentiment } from '../utils/finSentiment.js';
+import { CONFIG } from '../config.js';
 
 const CACHE_KEY = 'klever_orion_v2_news_cache';
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -59,6 +60,25 @@ const EXPERT_COLORS = {
   mix: '#94A3B8',
 };
 const MAX_NEWS_STALENESS_MS = 36 * 60 * 60 * 1000;
+
+const BACKEND_BASE = (CONFIG?.BACKEND_BASE || '').trim();
+
+const backendBaseUrl = (() => {
+  if (!BACKEND_BASE) return null;
+  try {
+    const normalized = BACKEND_BASE.endsWith('/') ? BACKEND_BASE : `${BACKEND_BASE}/`;
+    return new URL(normalized);
+  } catch (error) {
+    console.warn('[GoldNews] BACKEND_BASE inválido, usando mismo origen', error);
+    return null;
+  }
+})();
+
+const withBackendBase = (path) => {
+  const relative = path.startsWith('/') ? path.slice(1) : path;
+  if (!backendBaseUrl) return relative ? `/${relative}` : '/';
+  return new URL(relative, backendBaseUrl).toString();
+};
 
 export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   const [news, setNews] = useState(items ?? []);
@@ -1160,7 +1180,7 @@ function useDebouncedValue(value, delay = 250) {
 async function fetchAndAggregate(signal) {
   const baseQuery = 'gold price OR gold market';
   const results = await Promise.allSettled([
-    fetchWithBackoff(`/api/news?q=${encodeURIComponent(baseQuery)}`, { signal }),
+    fetchWithBackoff(withBackendBase(`/api/news?q=${encodeURIComponent(baseQuery)}`), { signal }),
     fetchWithBackoff('/.netlify/functions/news-feed', { signal }),
   ]);
 
@@ -1200,7 +1220,11 @@ async function fetchAndAggregate(signal) {
     for (const query of supplementalQueries) {
       if (signal?.aborted) break;
       try {
-        const payload = await fetchWithBackoff(`/api/news?q=${encodeURIComponent(query)}`, { signal, attempts: 1, baseDelay: 500 });
+        const payload = await fetchWithBackoff(withBackendBase(`/api/news?q=${encodeURIComponent(query)}`), {
+          signal,
+          attempts: 1,
+          baseDelay: 500,
+        });
         const extraItems = Array.isArray(payload?.items) ? payload.items : [];
         if (extraItems.length) {
           extraItems.forEach((item) => {

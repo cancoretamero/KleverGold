@@ -167,7 +167,7 @@ exports.handler = async (event) => {
 
   if (!aggregated.length) {
     //return H.json(502, { ok: false, error: 'Sin datos disponibles', failures });
-        return H.json(200, { items: [] });
+    return H.json(200, { items: [], failures });
   }
 
   const map = new Map();
@@ -186,7 +186,7 @@ exports.handler = async (event) => {
     .slice(0, 60);
 
   //return H.json(200, { ok: true, items: list, failures });
-      return H.json(200, { items: list });
+  return H.json(200, { items: list, failures });
 };
 
 function normalizeItems(doc, src) {

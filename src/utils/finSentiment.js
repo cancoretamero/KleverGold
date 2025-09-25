@@ -46,6 +46,77 @@ export async function classifySentiment(text) {
   return result;
 }
 
+export function resolveSentiment(predictions) {
+  if (!Array.isArray(predictions) || predictions.length === 0) {
+    return {
+      label: 'neutral',
+      score: 0.5,
+      distribution: { bullish: 0, neutral: 0, bearish: 0 },
+    };
+  }
+
+  const distribution = { bullish: 0, neutral: 0, bearish: 0 };
+  for (const entry of predictions) {
+    if (!entry) continue;
+    const mapped = normalizeLabel(entry.label);
+    const score = Number(entry.score) || 0;
+    if (score > distribution[mapped]) {
+      distribution[mapped] = score;
+    }
+  }
+
+  const label = pickLabelFromDistribution(distribution);
+  const score =
+    label === 'bullish'
+      ? distribution.bullish || Math.max(distribution.neutral, 0.5)
+      : label === 'bearish'
+        ? distribution.bearish || Math.max(distribution.neutral, 0.5)
+        : Math.max(distribution.neutral, (distribution.bullish + distribution.bearish) / 2, 0.5);
+
+  return { label, score, distribution };
+}
+
+function pickLabelFromDistribution({ bullish = 0, neutral = 0, bearish = 0 }) {
+  const dominant = Math.max(bullish, neutral, bearish);
+  const lean = bullish - bearish;
+  const positiveIsTop = dominant === bullish;
+  const negativeIsTop = dominant === bearish;
+  const magnitude = Math.max(bullish, bearish);
+  const neutralGap = dominant - neutral;
+
+  if (positiveIsTop && bullish >= 0.48 && neutralGap >= 0.05) return 'bullish';
+  if (negativeIsTop && bearish >= 0.48 && neutralGap >= 0.05) return 'bearish';
+
+  if (Math.abs(lean) >= 0.18 && magnitude >= 0.34) {
+    return lean > 0 ? 'bullish' : 'bearish';
+  }
+
+  if (neutral <= 0.42 && magnitude >= 0.32) {
+    return lean >= 0 ? 'bullish' : 'bearish';
+  }
+
+  if (positiveIsTop && bullish > neutral + 0.08) return 'bullish';
+  if (negativeIsTop && bearish > neutral + 0.08) return 'bearish';
+
+  if (neutral < 0.38 && magnitude >= 0.28 && Math.abs(lean) >= 0.1) {
+    return lean > 0 ? 'bullish' : 'bearish';
+  }
+
+  if (magnitude >= 0.52) {
+    return bullish >= bearish ? 'bullish' : 'bearish';
+  }
+
+  return 'neutral';
+}
+
+function normalizeLabel(label) {
+  if (!label) return 'neutral';
+  const value = String(label).toLowerCase();
+  if (value.includes('positive') || value.includes('bull')) return 'bullish';
+  if (value.includes('negative') || value.includes('bear')) return 'bearish';
+  return 'neutral';
+}
+
 /**
  * Clasifica una lista de noticias y añade campos 'sentimentLabel' y 'sentimentScore'.
  * @param {Array<{title: string, summaryHint: string}>} items
@@ -57,14 +128,8 @@ export async function classifyNewsItems(items = []) {
   for (const item of items) {
     const text = `${item.title || ''}. ${item.summaryHint || ''}`.trim();
     const preds = await clf(text || item.title);
-    const best = preds && preds[0] ? preds[0] : { label: 'neutral', score: 0 };
-    let label = best.label || '';
-    const score = best.score || 0;
-    const lower = label.toLowerCase();
-    const sentimentLabel = lower.includes('positive') ? 'bullish'
-      : lower.includes('negative') ? 'bearish'
-      : 'neutral';
-    out.push({ ...item, sentimentLabel, sentimentScore: score });
+    const resolved = resolveSentiment(preds);
+    out.push({ ...item, sentimentLabel: resolved.label, sentimentScore: resolved.score });
   }
   return out;
 }

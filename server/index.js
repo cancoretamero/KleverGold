@@ -261,8 +261,8 @@ app.get('/api/images', async (req, res) => {
   }
   if (!entry.promise) {
     entry.promise = (async () => {
-      const images = await searchUnsplashImages(query, 4);
-      const items = (images || []).slice(0, 4).map((image) => ({
+      const images = await searchUnsplashImages(query, 8);
+      const items = (images || []).slice(0, 8).map((image) => ({
         url: sanitizeUrl(image.url),
         thumbnail: sanitizeUrl(image.thumbnail),
         alt: sanitizeString(image.alt),

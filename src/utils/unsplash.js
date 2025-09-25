@@ -20,6 +20,9 @@ export async function searchUnsplashImages(query = 'gold bullion', perPage = 3) 
   const params = new URLSearchParams({
     query,
     per_page: String(perPage),
+    order_by: 'relevant',
+    orientation: 'landscape',
+    content_filter: 'high',
     client_id: accessKey
   });
   const url = `${UNSPLASH_ENDPOINT}?${params.toString()}`;

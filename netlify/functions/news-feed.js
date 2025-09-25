@@ -127,6 +127,62 @@ const SOURCES = [
     logo: 'https://logo.clearbit.com/bis.org',
     category: 'Supervisión',
   },
+  {
+    id: 'worldgoldcouncil',
+    name: 'World Gold Council',
+    url: 'https://www.gold.org/news/rss',
+    site: 'https://www.gold.org',
+    logo: 'https://logo.clearbit.com/gold.org',
+    category: 'Metales preciosos',
+  },
+  {
+    id: 'bullionvault',
+    name: 'BullionVault',
+    url: 'https://www.bullionvault.com/gold-news/gold/rssfeed',
+    site: 'https://www.bullionvault.com',
+    logo: 'https://logo.clearbit.com/bullionvault.com',
+    category: 'Mercados',
+  },
+  {
+    id: 'goldbroker',
+    name: 'GoldBroker',
+    url: 'https://www.goldbroker.com/rss',
+    site: 'https://www.goldbroker.com',
+    logo: 'https://logo.clearbit.com/goldbroker.com',
+    category: 'Metales preciosos',
+  },
+  {
+    id: 'goldseek',
+    name: 'GoldSeek',
+    url: 'https://feeds.feedburner.com/goldseek/feed',
+    site: 'https://www.goldseek.com',
+    logo: 'https://logo.clearbit.com/goldseek.com',
+    category: 'Noticias especializadas',
+  },
+  {
+    id: 'investopedia-commodities',
+    name: 'Investopedia Commodities',
+    url: 'https://www.investopedia.com/feed/commodities',
+    site: 'https://www.investopedia.com/markets/commodities',
+    logo: 'https://logo.clearbit.com/investopedia.com',
+    category: 'Educación financiera',
+  },
+  {
+    id: 'economic-times-commodities',
+    name: 'Economic Times Commodities',
+    url: 'https://economictimes.indiatimes.com/markets/commodities/rssfeed',
+    site: 'https://economictimes.indiatimes.com/markets/commodities',
+    logo: 'https://logo.clearbit.com/indiatimes.com',
+    category: 'Cobertura global',
+  },
+  {
+    id: 'ft-commodities',
+    name: 'Financial Times Commodities',
+    url: 'https://www.ft.com/commodities?format=rss',
+    site: 'https://www.ft.com/commodities',
+    logo: 'https://logo.clearbit.com/ft.com',
+    category: 'Mercados',
+  },
 ];
 
 const parser = new XMLParser({
@@ -144,6 +200,65 @@ exports.handler = async (event) => {
 
   const aggregated = [];
   const failures = [];
+
+  const newsApiKey = process.env.NEWS_API_KEY;
+  if (newsApiKey) {
+    try {
+      const urlNews = `https://newsapi.org/v2/everything?q=gold&sortBy=publishedAt&pageSize=100&language=en&apiKey=${newsApiKey}`;
+      const resNews = await fetch(urlNews, {
+        headers: {
+          'User-Agent': 'KleverGold/1.0 (+https://klevergold.example)',
+          Accept: 'application/json',
+        },
+      });
+      if (!resNews.ok) throw new Error(`HTTP ${resNews.status}`);
+      const dataNews = await resNews.json();
+      if (dataNews && Array.isArray(dataNews.articles)) {
+        for (const article of dataNews.articles) {
+          if (!article || !article.title || !article.url) continue;
+          const sourceId = (article.source?.name || 'newsapi')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '')
+            .slice(0, 32) || 'newsapi';
+          let publishedAtMs;
+          let publishedAtIso = '';
+          let publishedAt = '';
+          if (article.publishedAt) {
+            const publishedDate = new Date(article.publishedAt);
+            if (Number.isFinite(+publishedDate)) {
+              publishedAtMs = publishedDate.getTime();
+              publishedAtIso = publishedDate.toISOString();
+              publishedAt = publishedAtIso.slice(0, 10);
+            }
+          }
+          const summaryHint = summarize(article.description || '', article.title || '');
+          let sourceSite = '';
+          try {
+            sourceSite = new URL(article.url).origin;
+          } catch (_) {
+            sourceSite = article.url;
+          }
+          aggregated.push({
+            id: crypto.createHash('sha1').update(article.url).digest('hex'),
+            title: article.title.trim(),
+            link: article.url,
+            publishedAt,
+            publishedAtIso,
+            publishedAtMs,
+            source: article.source?.name || 'NewsAPI',
+            sourceId,
+            sourceLogo: '',
+            sourceCategory: 'Noticias generales',
+            sourceSite,
+            summaryHint,
+            imageHint: article.urlToImage || '',
+          });
+        }
+      }
+    } catch (err) {
+      failures.push({ source: 'newsapi', name: 'NewsAPI', error: err.message || String(err) });
+    }
+  }
 
   await Promise.all(
     SOURCES.map(async (src) => {

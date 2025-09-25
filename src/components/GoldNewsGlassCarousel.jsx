@@ -44,6 +44,11 @@ const FALLBACK_IMAGES = [
   'https://images.unsplash.com/photo-1554224155-6726b3ff858f?q=80&w=1600&auto=format&fit=crop',
   'https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1600&auto=format&fit=crop',
   'https://images.unsplash.com/photo-1566943956303-74261c0f3760?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1450101499163-c8848c66ca85?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1530172991371-4b50ab9746c7?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1586165368502-1bad197a6461?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1579722821273-0fdd166a8c8b?q=80&w=1600&auto=format&fit=crop',
+  'https://images.unsplash.com/photo-1580657018950-4480b9360c7e?q=80&w=1600&auto=format&fit=crop',
 ];
 const EXPERT_ORDER = ['macro', 'etf', 'usd', 'cb'];
 const EXPERT_COLORS = {
@@ -52,6 +57,13 @@ const EXPERT_COLORS = {
   usd: '#0EA5E9',
   cb: '#F97316',
   mix: '#94A3B8',
+};
+const CANONICAL_SOURCE_LABELS = {
+  newsapi: 'NewsAPI',
+  'open-feed': 'Feed abierto',
+  'open feed': 'Feed abierto',
+  'u.s. treasury': 'U.S. Treasury',
+  'us treasury': 'U.S. Treasury',
 };
 
 export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
@@ -68,10 +80,14 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   const [active, setActive] = useState(initialIndex);
 
   const wrapRef = useRef(null);
+  const activeRef = useRef(initialIndex);
   const pipelineRef = useRef({ promise: null, controller: null, failureCount: 0, openUntil: 0 });
   const cacheRef = useRef(null);
   const imageCacheRef = useRef(new Map());
   const firstLoad = useRef(false);
+  const scrollReleaseRef = useRef(null);
+  const scrollFrameRef = useRef(null);
+  const programmaticScrollRef = useRef(false);
   const debouncedSearch = useDebouncedValue(searchTerm, 240);
 
   const hasData = news.length > 0;
@@ -115,20 +131,24 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
     return sorted;
   }, [news, filters, debouncedSearch, sortBy]);
 
-  const virtualizationWindow = useMemo(() => {
-    const size = filteredItems.length;
-    if (!size) return new Set();
-    const windowRadius = 4;
-    const start = Math.max(0, active - windowRadius);
-    const end = Math.min(size - 1, active + windowRadius);
-    const set = new Set();
-    for (let i = start; i <= end; i += 1) set.add(i);
-    return set;
-  }, [filteredItems.length, active]);
-
   const cardsToRender = isLoading && !hasData
     ? Array.from({ length: 6 }, (_, index) => ({ __skeleton: true, id: `skeleton-${index}` }))
     : filteredItems;
+
+  const failureSources = useMemo(() => {
+    if (!failures.length) return [];
+    const seen = new Set();
+    const list = [];
+    for (const entry of failures) {
+      const rawName = sanitizeText(entry?.name || entry?.source);
+      if (!rawName) continue;
+      const key = rawName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(prettySourceLabel(rawName));
+    }
+    return list;
+  }, [failures]);
 
   const loadFromCache = useCallback(() => {
     if (cacheRef.current) return cacheRef.current;
@@ -245,50 +265,107 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   }, [items, fetchNews, loadFromCache]);
 
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el || !filteredItems.length) return;
-    const card = el.querySelector('[data-card]');
-    if (!card) return;
-    const gap = 24;
-    const width = card.getBoundingClientRect().width;
-    const idx = active < filteredItems.length ? active : 0;
-    const left = Math.max(0, idx * (width + gap) - (el.clientWidth - width) / 2);
-    el.scrollTo({ left, behavior: 'smooth' });
-  }, [filteredItems.length, active]);
+    activeRef.current = active;
+  }, [active]);
+
+  const focusCard = useCallback(
+    (index, { smooth = true } = {}) => {
+      if (typeof window === 'undefined') return;
+      const el = wrapRef.current;
+      if (!el) return;
+      const target = el.querySelector(`[data-card][data-idx="${index}"]`);
+      if (!target) return;
+
+      const cardWidth = target.getBoundingClientRect().width;
+      const offset = target.offsetLeft;
+      const left = Math.max(0, offset - Math.max(0, (el.clientWidth - cardWidth) / 2));
+
+      programmaticScrollRef.current = true;
+      if (scrollReleaseRef.current) {
+        clearTimeout(scrollReleaseRef.current);
+      }
+
+      el.scrollTo({ left, behavior: smooth ? 'smooth' : 'auto' });
+      scrollReleaseRef.current = setTimeout(() => {
+        programmaticScrollRef.current = false;
+      }, smooth ? 420 : 80);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!filteredItems.length) {
+      activeRef.current = 0;
+      setActive(0);
+      return;
+    }
+    const clamped = Math.min(activeRef.current, filteredItems.length - 1);
+    activeRef.current = clamped;
+    setActive(clamped);
+    focusCard(clamped, { smooth: false });
+  }, [filteredItems.length, focusCard]);
 
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    if (!filteredItems.length) return;
 
-    const io = new IntersectionObserver(
-      (entries) => {
-        const vis = entries
-          .filter((entry) => entry.isIntersecting)
-          .map((entry) => ({ idx: Number(entry.target.getAttribute('data-idx')), ratio: entry.intersectionRatio }))
-          .sort((a, b) => b.ratio - a.ratio);
-        if (vis[0]) setActive(vis[0].idx);
-      },
-      { root: el, threshold: [0.55, 0.75, 0.95] },
-    );
+    const handleScroll = () => {
+      if (programmaticScrollRef.current) return;
+      if (scrollFrameRef.current) {
+        cancelAnimationFrame(scrollFrameRef.current);
+      }
+      scrollFrameRef.current = requestAnimationFrame(() => {
+        const card = el.querySelector('[data-card]');
+        if (!card || !filteredItems.length) return;
+        const style = window.getComputedStyle(el);
+        const gap = parseFloat(style.columnGap || style.gap || '24') || 24;
+        const width = card.getBoundingClientRect().width;
+        const approx = Math.round(el.scrollLeft / (width + gap));
+        const clamped = Math.max(0, Math.min(approx, filteredItems.length - 1));
+        if (clamped !== activeRef.current) {
+          activeRef.current = clamped;
+          setActive(clamped);
+        }
+      });
+    };
 
-    const nodes = el.querySelectorAll('[data-card]');
-    nodes.forEach((node) => io.observe(node));
-    return () => io.disconnect();
-  }, [filteredItems]);
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      if (scrollFrameRef.current) {
+        cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
+  }, [filteredItems.length]);
+
+  useEffect(() => () => {
+    if (scrollReleaseRef.current) {
+      clearTimeout(scrollReleaseRef.current);
+    }
+    if (scrollFrameRef.current) {
+      cancelAnimationFrame(scrollFrameRef.current);
+    }
+  }, []);
 
   useEffect(() => () => {
     pipelineRef.current.controller?.abort();
   }, []);
 
-  const scrollByCards = useCallback((dir = 1) => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const card = el.querySelector('[data-card]');
-    const gap = 24;
-    const width = card ? card.getBoundingClientRect().width : 340;
-    el.scrollBy({ left: dir * (width + gap), behavior: 'smooth' });
-  }, []);
+  const scrollByCards = useCallback(
+    (dir = 1) => {
+      if (!filteredItems.length) return;
+      setActive((prev) => {
+        const next = Math.max(0, Math.min(prev + dir, filteredItems.length - 1));
+        activeRef.current = next;
+        if (next !== prev) {
+          focusCard(next);
+        }
+        return next;
+      });
+    },
+    [filteredItems.length, focusCard],
+  );
 
   const onSelectItem = useCallback((item) => {
     setSelected(item);
@@ -298,24 +375,49 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
     setSelected(null);
   }, []);
 
-  const updateSentimentFilter = useCallback((value) => {
-    setFilters((prev) => ({ ...prev, sentiment: value }));
+  const resetToFirstCard = useCallback(() => {
+    activeRef.current = 0;
     setActive(0);
-  }, []);
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        focusCard(0, { smooth: false });
+      });
+    } else {
+      focusCard(0, { smooth: false });
+    }
+  }, [focusCard]);
 
-  const updateBiasFilter = useCallback((value) => {
-    setFilters((prev) => ({ ...prev, bias: value }));
-    setActive(0);
-  }, []);
+  const updateSentimentFilter = useCallback(
+    (value) => {
+      setFilters((prev) => ({ ...prev, sentiment: value }));
+      resetToFirstCard();
+    },
+    [resetToFirstCard],
+  );
 
-  const handleSortChange = useCallback((event) => {
-    setSortBy(event.target.value);
-    setActive(0);
-  }, []);
+  const updateBiasFilter = useCallback(
+    (value) => {
+      setFilters((prev) => ({ ...prev, bias: value }));
+      resetToFirstCard();
+    },
+    [resetToFirstCard],
+  );
 
-  const handleSearchChange = useCallback((event) => {
-    setSearchTerm(event.target.value);
-  }, []);
+  const handleSortChange = useCallback(
+    (event) => {
+      setSortBy(event.target.value);
+      resetToFirstCard();
+    },
+    [resetToFirstCard],
+  );
+
+  const handleSearchChange = useCallback(
+    (event) => {
+      setSearchTerm(event.target.value);
+      resetToFirstCard();
+    },
+    [resetToFirstCard],
+  );
 
   return (
     <>
@@ -362,9 +464,9 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
           onSearchChange={handleSearchChange}
         />
 
-        {failures.length > 0 && (
+        {failureSources.length > 0 && (
           <div className="mb-3 text-xs text-amber-600">
-            Fuentes con incidencias: {failures.map((f) => f.name || f.source).join(', ')}.
+            Fuentes con incidencias temporales: {formatFailureSources(failureSources)}.
           </div>
         )}
 
@@ -404,7 +506,7 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
             <div className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-white to-transparent" />
             <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-white to-transparent" />
 
-            <div ref={wrapRef} className="news-scroll mt-4 flex gap-6 overflow-x-auto px-12 pb-10">
+            <div ref={wrapRef} className="news-scroll mt-4 flex snap-x snap-mandatory gap-6 overflow-x-auto px-12 pb-10">
               {cardsToRender.length === 0 && !isLoading && (
                 <div className="min-h-[220px] w-full rounded-2xl border border-gray-200 bg-gray-50/60 p-6 text-center text-sm text-gray-500">
                   Sin titulares recientes. Intenta recargar en unos minutos.
@@ -414,11 +516,6 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
               {cardsToRender.map((item, idx) => {
                 if (item.__skeleton) {
                   return <SkeletonCard key={item.id} />;
-                }
-
-                const shouldRender = virtualizationWindow.size ? virtualizationWindow.has(idx) : true;
-                if (!shouldRender) {
-                  return <VirtualPlaceholder key={item.id} />;
                 }
 
                 return (
@@ -581,7 +678,7 @@ function NewsCard({ item, index, isActive, onSelect }) {
       <div className="relative px-2">
         <div className="pointer-events-none absolute inset-x-8 -bottom-2 h-6 rounded-full bg-black/10 blur-lg transition group-hover:blur-xl" />
         <div className="relative overflow-hidden rounded-3xl ring-1 ring-black/5 shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition-all duration-300 group-hover:shadow-[0_18px_36px_rgba(15,23,42,0.18)]">
-          <Thumb src={item.image} alt={item.title} idx={index} />
+          <Thumb src={item.image} alt={item.title} seed={item.image || item.id || item.link || `${index}`} />
           <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
             {item.sourceLogo && (
               <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-white/60 bg-white/80 shadow-sm">
@@ -687,7 +784,7 @@ function InsightModal({ item, onClose }) {
 
         <div className="grid gap-6 md:grid-cols-[1.1fr_1fr]">
           <div className="relative">
-            <Thumb src={item.image} alt={item.title} idx={0} />
+            <Thumb src={item.image} alt={item.title} seed={item.image || item.id || item.link || item.title} />
             <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2">
               {item.sourceLogo && (
                 <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-white/60 bg-white/80 shadow">
@@ -813,8 +910,20 @@ function InsightSection({ icon: Icon, title, text }) {
   );
 }
 
-function VirtualPlaceholder() {
-  return <div className="min-w-[320px] max-w-[360px]" aria-hidden="true" />;
+function prettySourceLabel(name) {
+  const normalized = sanitizeText(name);
+  if (!normalized) return '';
+  const lookup = CANONICAL_SOURCE_LABELS[normalized.toLowerCase()];
+  if (lookup) return lookup;
+  return normalized;
+}
+
+function formatFailureSources(sources) {
+  if (!sources.length) return '';
+  if (sources.length <= 4) return sources.join(', ');
+  const visible = sources.slice(0, 4).join(', ');
+  const remaining = sources.length - 4;
+  return `${visible} y ${remaining} fuente${remaining === 1 ? '' : 's'} más`;
 }
 
 function SkeletonCard() {
@@ -864,20 +973,28 @@ function SkeletonCard() {
   );
 }
 
-function Thumb({ src, alt, idx = 0 }) {
+function Thumb({ src, alt, seed }) {
   const [okSrc, setOkSrc] = useState(null);
   const [loading, setLoading] = useState(true);
+  const fallbackStepRef = useRef(0);
+
+  useEffect(() => {
+    fallbackStepRef.current = 0;
+    setOkSrc(null);
+    setLoading(true);
+  }, [src, seed]);
 
   useEffect(() => {
     let alive = true;
-    const candidate = src || '';
+    const candidate = (src || '').trim();
     if (!candidate) {
-      setOkSrc(FALLBACK_IMAGES[idx % FALLBACK_IMAGES.length]);
+      setOkSrc(selectFallbackImage(seed, fallbackStepRef.current));
       setLoading(false);
       return () => {
         alive = false;
       };
     }
+
     const img = new Image();
     img.referrerPolicy = 'no-referrer';
     img.onload = () => {
@@ -888,33 +1005,55 @@ function Thumb({ src, alt, idx = 0 }) {
     };
     img.onerror = () => {
       if (alive) {
-        setOkSrc(FALLBACK_IMAGES[idx % FALLBACK_IMAGES.length]);
+        fallbackStepRef.current += 1;
+        setOkSrc(selectFallbackImage(seed, fallbackStepRef.current));
         setLoading(false);
       }
     };
     img.src = candidate;
+
     return () => {
       alive = false;
     };
-  }, [src, idx]);
+  }, [src, seed]);
+
+  const fallback = selectFallbackImage(seed, fallbackStepRef.current);
 
   return (
     <div className="relative aspect-[16/9] w-full bg-gray-100">
       {loading && <div className="absolute inset-0 animate-pulse bg-gray-200" />}
       <img
-        src={okSrc || FALLBACK_IMAGES[idx % FALLBACK_IMAGES.length]}
+        src={okSrc || fallback}
         alt={alt || 'thumbnail'}
         className="h-full w-full object-cover"
         loading="lazy"
         referrerPolicy="no-referrer"
         onLoad={() => setLoading(false)}
         onError={() => {
-          setOkSrc(FALLBACK_IMAGES[(idx + 1) % FALLBACK_IMAGES.length]);
+          fallbackStepRef.current += 1;
+          setOkSrc(selectFallbackImage(seed, fallbackStepRef.current));
           setLoading(false);
         }}
       />
     </div>
   );
+}
+
+function selectFallbackImage(seed, step = 0) {
+  const base = deterministicIndex(seed);
+  const offset = (base + step) % FALLBACK_IMAGES.length;
+  return FALLBACK_IMAGES[offset < 0 ? offset + FALLBACK_IMAGES.length : offset];
+}
+
+function deterministicIndex(seed) {
+  if (seed == null) return 0;
+  const str = String(seed);
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % FALLBACK_IMAGES.length;
 }
 
 function Badge({ tone = 'secondary', intensity = 1, children }) {

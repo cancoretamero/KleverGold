@@ -211,12 +211,13 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
           return;
         }
 
-        setNews(clusters);
-        setTrend(newTrend);
+        const prepared = hydrateInitialItems(clusters);
+        setNews(prepared);
+        setTrend(newTrend ?? computeTrend(prepared));
         setFailures(base.failures);
         setStatus('ready');
-        setActive((prev) => (prev < clusters.length ? prev : 0));
-        writeCache({ items: clusters, failures: base.failures, trend: newTrend, expiresAt: Date.now() + CACHE_TTL_MS });
+        setActive((prev) => (prev < prepared.length ? prev : 0));
+        writeCache({ items: prepared, failures: base.failures, trend: newTrend, expiresAt: Date.now() + CACHE_TTL_MS });
       } catch (err) {
         if (controller.signal.aborted) return;
         const message = err?.message || 'No se pudo cargar el feed';
@@ -242,10 +243,11 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
 
   useEffect(() => {
     if (items && items.length) {
+      const prepared = hydrateInitialItems(items);
       setStatus('ready');
-      setNews(items);
+      setNews(prepared);
       setFailures([]);
-      setTrend(computeTrend(items));
+      setTrend(computeTrend(prepared));
       return;
     }
 
@@ -253,8 +255,9 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
       firstLoad.current = true;
       const cached = loadFromCache();
       if (cached?.items?.length) {
-        setNews(cached.items);
-        setTrend(cached.trend);
+        const prepared = hydrateInitialItems(cached.items);
+        setNews(prepared);
+        setTrend(cached.trend ?? computeTrend(prepared));
         setFailures(cached.failures ?? []);
         setStatus('ready');
         setTimeout(() => { fetchNews(); }, 200);
@@ -1606,6 +1609,129 @@ function hashToIndex(seed, length) {
     hash |= 0;
   }
   return Math.abs(hash) % length;
+}
+
+function hydrateInitialItems(items) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const seenImages = new Map();
+  const usedFallbacks = new Set();
+
+  return items.map((item, index) => {
+    if (!item || typeof item !== 'object') return item;
+
+    const id = item.id || stableHash(`${item.title || ''}${item.link || ''}${index}`);
+    const biasLabel = normalizeBiasLabel(
+      item.biasLabel || item.bias || item.biasLevelModel || item.biasLevel || item.bias?.label,
+    );
+    const biasScore = coerceScore(
+      item.biasScore,
+      item.biasScoreModel,
+      item.bias?.score,
+      item.biasConfidence,
+    );
+    const sentimentLabel = normalizeSentimentLabel(
+      item.sentiment || item.sentimentLabel || item.sentimentTrend || item.moeSentiment || item.sentiment?.label,
+    );
+    const sentimentScore = coerceScore(
+      item.sentimentScore,
+      item.sentiment?.score,
+      item.sentimentConfidence,
+      item.sentimentProbability,
+    );
+
+    const rawImage = sanitizeUrl(
+      item.image || item.imageUrl || item.urlToImage || item.mediaUrl || item.media?.url || item.enclosure?.url,
+    );
+    let image = rawImage;
+    if (image) {
+      const count = seenImages.get(image) || 0;
+      seenImages.set(image, count + 1);
+      if (count > 0) {
+        image = '';
+      }
+    }
+
+    let imageFromFallback = false;
+    if (!image) {
+      image = pickFallbackImageForItem(item, index, usedFallbacks);
+      imageFromFallback = Boolean(image);
+    }
+
+    const providedAlt = sanitizeText(item.imageAlt || item.image_alt || item.imageDescription || '');
+    const titleAlt = sanitizeText(item.title);
+    const imageAlt = providedAlt || titleAlt || 'Noticia reciente del mercado del oro';
+    const imageAttribution = sanitizeText(
+      item.imageAttribution || item.imageCredit || item.image_credit || item.image_author || '',
+    );
+
+    const stackSize = Number.isFinite(item.stackSize)
+      ? item.stackSize
+      : Array.isArray(item.stack)
+      ? item.stack.length
+      : undefined;
+
+    const next = {
+      ...item,
+      id,
+      biasLabel,
+      biasScore,
+      sentiment: sentimentLabel,
+      sentimentScore,
+      image: image || null,
+      imageAlt: imageAlt || null,
+      imageAttribution: imageAttribution || null,
+    };
+
+    if (typeof stackSize === 'number') {
+      next.stackSize = stackSize;
+    }
+
+    if (imageFromFallback) {
+      usedFallbacks.add(image);
+    }
+
+    return next;
+  });
+}
+
+function normalizeSentimentLabel(label) {
+  if (!label) return 'neutral';
+  const value = String(label).toLowerCase();
+  if (value.includes('bull') || value.includes('alcist')) return 'bullish';
+  if (value.includes('bear') || value.includes('bajist')) return 'bearish';
+  if (value.includes('positivo')) return 'bullish';
+  if (value.includes('negativo')) return 'bearish';
+  return 'neutral';
+}
+
+function coerceScore(...values) {
+  for (const value of values) {
+    const number = typeof value === 'string' ? parseFloat(value) : value;
+    if (!Number.isFinite(number)) continue;
+    if (number > 1 && number <= 100) {
+      return Math.min(1, Math.max(0, number / 100));
+    }
+    return Math.min(1, Math.max(0, number));
+  }
+  return 0;
+}
+
+function sanitizeUrl(value) {
+  if (!value) return '';
+  return String(value).trim();
+}
+
+function pickFallbackImageForItem(item, index, usedFallbacks) {
+  if (!FALLBACK_IMAGES.length) return '';
+  const seed = `${item?.id || ''}:${item?.title || ''}:${index}`;
+  const start = hashToIndex(seed, FALLBACK_IMAGES.length);
+  for (let offset = 0; offset < FALLBACK_IMAGES.length; offset += 1) {
+    const candidate = FALLBACK_IMAGES[(start + offset) % FALLBACK_IMAGES.length];
+    if (!usedFallbacks.has(candidate)) {
+      return candidate;
+    }
+  }
+  return FALLBACK_IMAGES[start % FALLBACK_IMAGES.length];
 }
 
 function buildImageQuery(item) {

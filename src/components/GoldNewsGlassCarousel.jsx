@@ -53,6 +53,13 @@ const EXPERT_COLORS = {
   cb: '#F97316',
   mix: '#94A3B8',
 };
+const CANONICAL_SOURCE_LABELS = {
+  newsapi: 'NewsAPI',
+  'open-feed': 'Feed abierto',
+  'open feed': 'Feed abierto',
+  'u.s. treasury': 'U.S. Treasury',
+  'us treasury': 'U.S. Treasury',
+};
 
 export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
   const [news, setNews] = useState(items ?? []);
@@ -115,20 +122,24 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
     return sorted;
   }, [news, filters, debouncedSearch, sortBy]);
 
-  const virtualizationWindow = useMemo(() => {
-    const size = filteredItems.length;
-    if (!size) return new Set();
-    const windowRadius = 4;
-    const start = Math.max(0, active - windowRadius);
-    const end = Math.min(size - 1, active + windowRadius);
-    const set = new Set();
-    for (let i = start; i <= end; i += 1) set.add(i);
-    return set;
-  }, [filteredItems.length, active]);
-
   const cardsToRender = isLoading && !hasData
     ? Array.from({ length: 6 }, (_, index) => ({ __skeleton: true, id: `skeleton-${index}` }))
     : filteredItems;
+
+  const failureSources = useMemo(() => {
+    if (!failures.length) return [];
+    const seen = new Set();
+    const list = [];
+    for (const entry of failures) {
+      const rawName = sanitizeText(entry?.name || entry?.source);
+      if (!rawName) continue;
+      const key = rawName.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(prettySourceLabel(rawName));
+    }
+    return list;
+  }, [failures]);
 
   const loadFromCache = useCallback(() => {
     if (cacheRef.current) return cacheRef.current;
@@ -362,9 +373,9 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
           onSearchChange={handleSearchChange}
         />
 
-        {failures.length > 0 && (
+        {failureSources.length > 0 && (
           <div className="mb-3 text-xs text-amber-600">
-            Fuentes con incidencias: {failures.map((f) => f.name || f.source).join(', ')}.
+            Fuentes con incidencias temporales: {formatFailureSources(failureSources)}.
           </div>
         )}
 
@@ -414,11 +425,6 @@ export default function GoldNewsGlassCarousel({ items, initialIndex = 0 }) {
               {cardsToRender.map((item, idx) => {
                 if (item.__skeleton) {
                   return <SkeletonCard key={item.id} />;
-                }
-
-                const shouldRender = virtualizationWindow.size ? virtualizationWindow.has(idx) : true;
-                if (!shouldRender) {
-                  return <VirtualPlaceholder key={item.id} />;
                 }
 
                 return (
@@ -813,8 +819,20 @@ function InsightSection({ icon: Icon, title, text }) {
   );
 }
 
-function VirtualPlaceholder() {
-  return <div className="min-w-[320px] max-w-[360px]" aria-hidden="true" />;
+function prettySourceLabel(name) {
+  const normalized = sanitizeText(name);
+  if (!normalized) return '';
+  const lookup = CANONICAL_SOURCE_LABELS[normalized.toLowerCase()];
+  if (lookup) return lookup;
+  return normalized;
+}
+
+function formatFailureSources(sources) {
+  if (!sources.length) return '';
+  if (sources.length <= 4) return sources.join(', ');
+  const visible = sources.slice(0, 4).join(', ');
+  const remaining = sources.length - 4;
+  return `${visible} y ${remaining} fuente${remaining === 1 ? '' : 's'} más`;
 }
 
 function SkeletonCard() {
